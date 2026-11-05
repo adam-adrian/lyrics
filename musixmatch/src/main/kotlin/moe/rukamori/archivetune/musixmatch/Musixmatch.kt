@@ -78,18 +78,20 @@ object Musixmatch {
         return if (engine != null) HttpClient(engine, clientConfig) else HttpClient(OkHttp, clientConfig)
     }
 
+    private val defaultClient: HttpClient by lazy { createHttpClient() }
+
     @Volatile
-    private var customClient: HttpClient? = null
+    private var overrideClient: HttpClient? = null
 
     internal var client: HttpClient
-        get() = customClient ?: createHttpClient().also { customClient = it }
+        get() = overrideClient ?: defaultClient
         set(value) {
-            customClient = value
+            overrideClient = value
         }
 
     internal fun resetForTesting(engine: HttpClientEngine? = null) {
         cachedToken = null
-        customClient = engine?.let { createHttpClient(it) }
+        overrideClient = engine?.let { createHttpClient(it) }
     }
 
     private val tokenMutex = Mutex()

@@ -673,4 +673,20 @@ class MusixmatchApiTest {
                 assertFalse("Logger leaked json body: $msg", msg.contains("macro_calls") || msg.contains("\"header\""))
             }
         }
+
+    @Test
+    fun testClient_threadSafeLazyInitialization() =
+        runBlocking {
+            Musixmatch.resetForTesting(null)
+            val instances =
+                (1..5)
+                    .map {
+                        async { Musixmatch.client }
+                    }.map { it.await() }
+
+            val first = instances.first()
+            instances.forEach { instance ->
+                assertTrue("All concurrent accesses must yield the exact same HttpClient instance", instance === first)
+            }
+        }
 }
