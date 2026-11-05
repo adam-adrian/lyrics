@@ -35,16 +35,7 @@ data class MacroCalls(
     @SerialName("track.lyrics.get") val trackLyricsGet: MacroCall? = null,
     @SerialName("track.subtitles.get") val trackSubtitlesGet: MacroCall? = null,
     @SerialName("track.richsync.get") val trackRichsyncGet: MacroCall? = null,
-) {
-    operator fun get(key: String): MacroCall? =
-        when (key) {
-            "matcher.track.get" -> matcherTrackGet
-            "track.lyrics.get" -> trackLyricsGet
-            "track.subtitles.get" -> trackSubtitlesGet
-            "track.richsync.get" -> trackRichsyncGet
-            else -> null
-        }
-}
+)
 
 inline fun <reified T> MacroCall?.bodyAs(json: Json): T? {
     val body = this?.message?.body

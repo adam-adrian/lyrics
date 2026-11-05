@@ -79,18 +79,17 @@ object Musixmatch {
     }
 
     @Volatile
-    internal var client: HttpClient = createHttpClient()
+    private var customClient: HttpClient? = null
 
-    private val tokenMutex = Mutex()
-
-    @Volatile
-    internal var cachedToken: String? = null
+    internal var client: HttpClient
+        get() = customClient ?: createHttpClient().also { customClient = it }
+        set(value) {
+            customClient = value
+        }
 
     internal fun resetForTesting(engine: HttpClientEngine? = null) {
         cachedToken = null
-        if (engine != null) {
-            client = createHttpClient(engine)
-        }
+        customClient = engine?.let { createHttpClient(it) }
     }
 
     internal suspend fun getToken(): String {
@@ -289,8 +288,14 @@ object Musixmatch {
         val normTrackArtist = normalizeString(track.artistName)
         val normInputArtist = normalizeString(inputArtist)
 
-        val titleOk = normTrackTitle.contains(normInputTitle) || normInputTitle.contains(normTrackTitle)
-        val artistOk = normTrackArtist.contains(normInputArtist) || normInputArtist.contains(normTrackArtist)
+        val titleOk =
+            normTrackTitle.isNotEmpty() &&
+                normInputTitle.isNotEmpty() &&
+                (normTrackTitle.contains(normInputTitle) || normInputTitle.contains(normTrackTitle))
+        val artistOk =
+            normTrackArtist.isNotEmpty() &&
+                normInputArtist.isNotEmpty() &&
+                (normTrackArtist.contains(normInputArtist) || normInputArtist.contains(normTrackArtist))
 
         if (!titleOk && !artistOk) {
             throw MusixmatchError.Mismatch("Track and artist both mismatched")
@@ -367,6 +372,12 @@ object Musixmatch {
             val track = matcherBody?.track
             validateMatch(track, cleanTitle, cleanArtist, durationSeconds)
 
+            val lyricsBody = calls?.trackLyricsGet.bodyAs<LyricsBody>(jsonFormat)
+            val lyricsData = lyricsBody?.lyrics
+            if (lyricsData?.isRestricted == true) {
+                throw MusixmatchError.Restricted()
+            }
+
             if (track != null && track.isInstrumental) {
                 return Result.success("♪ Instrumental ♪")
             }
@@ -407,11 +418,6 @@ object Musixmatch {
             }
 
             // 3. Plain lyrics
-            val lyricsBody = calls?.trackLyricsGet.bodyAs<LyricsBody>(jsonFormat)
-            val lyricsData = lyricsBody?.lyrics
-            if (lyricsData?.isRestricted == true) {
-                throw MusixmatchError.Restricted()
-            }
             val lyricsBodyStr = lyricsData?.lyricsBody
             if (!lyricsBodyStr.isNullOrBlank()) {
                 val plainResult = cleanPlainLyrics(lyricsBodyStr)

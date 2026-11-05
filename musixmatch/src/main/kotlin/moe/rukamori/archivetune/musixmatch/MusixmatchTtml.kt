@@ -11,6 +11,8 @@ import java.util.Locale
 import kotlin.math.max
 
 internal object MusixmatchTtml {
+    private const val MIN_SPAN = 0.001
+
     private sealed interface Token {
         val text: String
 
@@ -52,7 +54,7 @@ internal object MusixmatchTtml {
 
         val lineStart = line.startTime
         val lineEnd = line.endTime
-        if (lineEnd <= lineStart) {
+        if (lineEnd <= lineStart || lineEnd - lineStart < 2 * MIN_SPAN) {
             return null
         }
 
@@ -64,7 +66,7 @@ internal object MusixmatchTtml {
             if (c.isBlank()) {
                 tokens.add(Token.Gap(text = c))
             } else {
-                val clampedStart = (lineStart + item.offset).coerceIn(lineStart, lineEnd - 0.001)
+                val clampedStart = (lineStart + item.offset).coerceIn(lineStart, lineEnd - MIN_SPAN)
                 tokens.add(Token.Word(text = c, start = clampedStart))
                 wordIndices.add(tokens.lastIndex)
             }
@@ -84,7 +86,7 @@ internal object MusixmatchTtml {
                 } else {
                     lineEnd
                 }
-            currentWord.end = max(nextStart, currentWord.start + 0.001)
+            currentWord.end = max(nextStart, currentWord.start + MIN_SPAN)
         }
 
         val inner = buildString {
@@ -111,6 +113,7 @@ internal object MusixmatchTtml {
 
     fun convertRichSyncToTtml(lines: List<RichSyncLine>): String {
         val pTags = lines.mapNotNull(::convertLine)
+        if (pTags.isEmpty()) return ""
         return buildString {
             append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
             append("<tt xmlns=\"http://www.w3.org/ns/ttml\" xmlns:ttm=\"http://www.w3.org/ns/ttml#metadata\">\n")
