@@ -10,6 +10,23 @@
 | Basis desain | `musixmatch_archivetune_tracker (3).md` + `Musixmatch-Tracker-Review.md` |
 | Toolchain | JDK 21 (temurin), **Gradle 8.10**, Kotlin 2.1.0, Ktor 3.1.0 |
 | Tanggal | 5 Nov 2026 |
+| **Revisi** | **REV 2** — memuat 2 koreksi dari smoke test live (`implementer-notes.md`) |
+| Verifikasi | GitHub Actions fork, bukan build lokal (lihat §0.1) |
+
+### Status verifikasi lapangan (smoke test 5 Nov 2026)
+
+Sudah terbukti terhadap API nyata, bukan asumsi:
+
+| Klaim spec | Status |
+|---|---|
+| `token.get` + header `X-User-Agent` iOS | ✅ HTTP 200, token 54 karakter |
+| Richsync inline via `optional_calls` + `richsync_compact_type` | ✅ satu network call |
+| Spasi sebagai text node, bukan `<span>` | ✅ XML valid, kompatibel `appendInterSpanText()` |
+| Durasi kata terakhir `te - (ts + o)` | ✅ presisi, tanpa overlap |
+| Guard instrumental | ✅ `"♪ Instrumental ♪"`, richsync tidak dipanggil |
+| Guard matcher (durasi & teks) | ✅ `Mismatch` / `NoMatch` sesuai harapan |
+| Model generik `MacroCall<T>` (Rev 1) | ❌ **salah** — lihat §3.5 |
+| Flag boolean sebagai `Boolean` (Rev 1) | ❌ **salah** — lihat §3.5 |
 
 ---
 
@@ -29,6 +46,41 @@ Kalau menemukan fakta kode yang berbeda dari yang tertulis di sini, **berhenti d
 - Jangan log token, full URL, response body, atau isi lirik.
 - Jangan pakai DataStore/SharedPreferences di module ini.
 - Jangan pretty-print XML di dalam `<p>` (lihat §5.3 — ini merusak spasi).
+
+### 0.1 Cara verifikasi: GitHub Actions adalah mesin build
+
+**Baik advisor maupun implementer tidak punya mesin yang sanggup menjalankan Gradle.** Laptop implementer kurang bertenaga; sandbox advisor pernah thrashing saat `gradle build` penuh.
+
+Solusinya sudah tersedia di repo: `.github/workflows/test_build_push.yml` menjalankan **JDK 21 + Gradle 8.10** di `ubuntu-latest`, gratis, dengan trigger `on: push` ke **semua branch**.
+
+Alur kerja:
+
+```
+implementer push ke feat/musixmatch
+        ↓
+GitHub Actions fork menjalankan `gradle build test`
+        ↓
+advisor baca hasil via API publik, review diff
+```
+
+Yang perlu dilakukan sekali: **pastikan tab Actions di fork `adam-adrian/lyrics` di-enable.** Fork kadang datang dengan Actions nonaktif.
+
+Dua catatan penting:
+
+- Workflow punya `paths-ignore: ["**.md"]`. **Push docs-only tidak memicu CI** — itu sebabnya commit `896fb62` belum menghasilkan run apa pun (`total_count: 0`). CI baru jalan saat ada perubahan kode.
+- Advisor bisa membaca status tanpa autentikasi:
+  `https://api.github.com/repos/adam-adrian/lyrics/actions/runs`
+
+Jadi **tidak ada yang perlu menjalankan Gradle secara lokal.** Kalau tetap ingin mencoba di mesin lemah, gunakan batas memori ketat dan satu module saja:
+
+```bash
+gradle --no-daemon --no-parallel --max-workers=1 \
+  -Dorg.gradle.jvmargs="-Xmx900m -XX:MaxMetaspaceSize=384m" \
+  -Dkotlin.compiler.execution.strategy=in-process \
+  :musixmatch:test
+```
+
+`kotlin.compiler.execution.strategy=in-process` adalah penghematan terbesar — menghilangkan daemon Kotlin terpisah.
 
 ---
 
@@ -262,19 +314,85 @@ f_subtitle_length=<floor(duration)>  (kalau duration > 0)
 
 **`optional_calls` dan `richsync_compact_type` dua-duanya wajib.** `namespace` saja tidak menghasilkan richsync. `richsync_compact_type=words` yang menjamin bentuk `{c, o}`; tanpa itu model bisa diam-diam kosong karena `ignoreUnknownKeys = true`.
 
-### 3.5 Model macro
+### 3.5 Model macro — REV 2, hasil smoke test live
 
-Key JSON mengandung titik → wajib `@SerialName`. **Empat** macro call, bukan tiga:
+> **Revisi ini berasal dari `implementer-notes.md` (smoke test 5 Nov 2026).** Desain generik `MacroCall<T>` pada Rev 1 **salah** dan akan gagal di produksi. Dua temuan lapangan menggugurkannya.
+
+#### Temuan A — `body` bisa berupa `[]`, bukan `{}`
+
+Kalau sub-call tidak punya data, Musixmatch mengembalikan `body: []` (array kosong), bukan object atau `null`. Model generik yang mengharapkan object akan gagal parse — dan karena semua sub-call ada dalam satu payload, **satu sub-call kosong bisa merusak seluruh response**.
+
+**Solusi: jangan pakai generik.** Simpan `body` sebagai `JsonElement?`, decode per sub-call secara terpisah:
 
 ```kotlin
 @Serializable
-data class MacroCalls(
-    @SerialName("matcher.track.get") val matcherTrackGet: MacroCall<MatcherBody>? = null,
-    @SerialName("track.lyrics.get") val trackLyricsGet: MacroCall<LyricsBody>? = null,
-    @SerialName("track.subtitles.get") val trackSubtitlesGet: MacroCall<SubtitlesBody>? = null,
-    @SerialName("track.richsync.get") val trackRichsyncGet: MacroCall<RichSyncBody>? = null,
+data class MacroCall(
+    val message: MacroMessage = MacroMessage(),
 )
+
+@Serializable
+data class MacroMessage(
+    val header: MusixmatchHeader = MusixmatchHeader(),
+    val body: JsonElement? = null,
+)
+
+@Serializable
+data class MacroCalls(
+    @SerialName("matcher.track.get") val matcherTrackGet: MacroCall? = null,
+    @SerialName("track.lyrics.get") val trackLyricsGet: MacroCall? = null,
+    @SerialName("track.subtitles.get") val trackSubtitlesGet: MacroCall? = null,
+    @SerialName("track.richsync.get") val trackRichsyncGet: MacroCall? = null,
+)
+
+// Decode terisolasi: body non-object → null, bukan exception.
+inline fun <reified T> MacroCall?.bodyAs(json: Json): T? {
+    val body = this?.message?.body
+    if (body == null || body !is JsonObject) return null
+    return runCatching { json.decodeFromJsonElement<T>(body) }.getOrNull()
+}
 ```
+
+Keuntungan dibanding desain generik Rev 1:
+
+- `body: []` → bukan `JsonObject` → `null` → fallback chain lanjut normal
+- Satu sub-call rusak **tidak** menjatuhkan sub-call lain
+- Tidak perlu custom serializer
+- Status header tetap bisa dicek per sub-call sebelum decode
+
+Sub-call yang teramati di respons nyata: `matcher.track.get`, `track.richsync.get`, `track.subtitles.get`, `track.lyrics.get`, `track.snippet.get`, `userblob.get`. **Abaikan** dua yang terakhir — `ignoreUnknownKeys = true` sudah menangani.
+
+#### Temuan B — semua flag boolean adalah Integer `0`/`1`
+
+Musixmatch mengembalikan `instrumental`, `has_richsync`, `has_subtitles`, `has_lyrics`, `has_lyrics_crowd`, `restricted` sebagai **integer**, bukan `true`/`false`.
+
+Mendeklarasikannya `Boolean` menghasilkan `SerializationException: Expected boolean, found 1`. Perlu diketahui: **`coerceInputValues = true` TIDAK menolong** — opsi itu hanya menangani `null` → default dan enum tak dikenal, bukan `Int` → `Boolean`. `isLenient` juga tidak.
+
+**Aturan umum: setiap field yang tampak boolean di API Musixmatch harus dideklarasikan `Int = 0`.** Sediakan computed property untuk keterbacaan:
+
+```kotlin
+@Serializable
+data class Track(
+    @SerialName("track_id") val trackId: Long = 0,
+    @SerialName("commontrack_id") val commonTrackId: Long = 0,
+    @SerialName("track_name") val trackName: String = "",
+    @SerialName("artist_name") val artistName: String = "",
+    @SerialName("track_length") val trackLength: Int = 0,
+    @SerialName("has_richsync") val hasRichsync: Int = 0,
+    @SerialName("has_subtitles") val hasSubtitles: Int = 0,
+    @SerialName("has_lyrics") val hasLyrics: Int = 0,
+    @SerialName("has_lyrics_crowd") val hasLyricsCrowd: Int = 0,
+    @SerialName("instrumental") val instrumental: Int = 0,
+) {
+    val isInstrumental: Boolean get() = instrumental == 1
+    val isRichsyncAvailable: Boolean get() = hasRichsync == 1
+    val isSubtitlesAvailable: Boolean get() = hasSubtitles == 1
+    val isLyricsAvailable: Boolean get() = hasLyrics == 1 || hasLyricsCrowd == 1
+}
+```
+
+Berlaku juga untuk `lyrics.restricted` → `Int = 0`, computed `isRestricted`.
+
+**Konsekuensi ke §4.1 dan §4.2:** semua pengecekan pakai computed property (`track.isInstrumental`, `track.isRichsyncAvailable`), bukan perbandingan `== true`.
 
 Path yang harus diverifikasi terhadap fixture:
 
@@ -600,6 +718,15 @@ Kata terakhir: `11.283 - (7.748 + 2.902) = 0.633s`.
 26. Instrumental → marker, richsync tidak dipanggil
 27. `restricted` → failure
 28. Fallback: richsync gagal → LRC; LRC gagal → plain; plain kosong → failure
+
+**Regresi smoke test (REV 2 — wajib, ini yang menggugurkan desain Rev 1)**
+
+29. Sub-call dengan `body: []` → `bodyAs<T>()` mengembalikan `null`, **bukan** exception
+30. `track.subtitles.get` punya `body: []` sementara `track.richsync.get` valid → richsync tetap berhasil (isolasi per sub-call terbukti)
+31. Flag integer `has_richsync: 1` / `instrumental: 0` → ter-decode tanpa `SerializationException`, computed property benar
+32. `instrumental: 1` → marker, richsync tidak dipanggil
+33. `restricted: 1` → failure
+34. `body: null` dan `body` absen → `null`, tanpa exception
 
 ### Acceptance Phase 5
 
