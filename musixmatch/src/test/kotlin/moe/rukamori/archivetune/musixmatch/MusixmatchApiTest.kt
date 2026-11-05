@@ -13,6 +13,9 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -173,6 +176,7 @@ class MusixmatchApiTest {
             val engine =
                 MockEngine { request ->
                     if (request.url.encodedPath.endsWith("token.get")) {
+                        delay(50)
                         requestCount.incrementAndGet()
                         respond(jsonTokenResponse(), HttpStatusCode.OK, jsonHeaders)
                     } else {
@@ -181,11 +185,12 @@ class MusixmatchApiTest {
                 }
             Musixmatch.resetForTesting(engine)
 
-            val call1 = async { Musixmatch.getToken() }
-            val call2 = async { Musixmatch.getToken() }
-
-            val res1 = call1.await()
-            val res2 = call2.await()
+            val (res1, res2) =
+                withContext(Dispatchers.Default) {
+                    val call1 = async { Musixmatch.getToken() }
+                    val call2 = async { Musixmatch.getToken() }
+                    call1.await() to call2.await()
+                }
 
             assertEquals("test_user_token_abc12345", res1)
             assertEquals("test_user_token_abc12345", res2)
@@ -679,10 +684,12 @@ class MusixmatchApiTest {
         runBlocking {
             Musixmatch.resetForTesting(null)
             val instances =
-                (1..5)
-                    .map {
-                        async { Musixmatch.client }
-                    }.map { it.await() }
+                withContext(Dispatchers.Default) {
+                    (1..32)
+                        .map {
+                            async { Musixmatch.client }
+                        }.map { it.await() }
+                }
 
             val first = instances.first()
             instances.forEach { instance ->
