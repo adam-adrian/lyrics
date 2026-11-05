@@ -92,6 +92,11 @@ object Musixmatch {
         customClient = engine?.let { createHttpClient(it) }
     }
 
+    private val tokenMutex = Mutex()
+
+    @Volatile
+    internal var cachedToken: String? = null
+
     internal suspend fun getToken(): String {
         cachedToken?.let { return it }
         return tokenMutex.withLock {
