@@ -738,22 +738,184 @@ Kata terakhir: `11.283 - (7.748 + 2.902) = 0.633s`.
 
 ## 7. Phase 6 — Integrasi app (repo terpisah)
 
-**Ini PR kedua, ke `rukamori/ArchiveTune`.** Jangan campur dengan PR submodule.
+**PR kedua, ke `rukamori/ArchiveTune`.** Semua titik di bawah **sudah diverifikasi** terhadap `dev` @ `91a98f2`.
 
-1. `settings.gradle.kts` utama → `include(":lyrics:musixmatch")`
-2. `app/build.gradle.kts` → `implementation(project(":lyrics:musixmatch"))`
-3. `app/src/main/kotlin/moe/rukamori/archivetune/lyrics/MusixmatchLyricsProvider.kt` — implement `LyricsProvider`
-4. `constants/PreferenceKeys.kt` → `EnableMusixmatchLyricsKey`, entry enum `PreferredLyricsProvider` (~:603), `DefaultLyricsProviderOrder` (~:618)
-5. `lyrics/LyricsHelper.kt` (~:400-411) → mapping enum → object
-6. `lyrics/LyricsProviderSettings.kt` → `providerKeys`
-7. `ui/screens/settings/LyricsSettings.kt` → `enableLabel()` (~:599), `displayName()` (~:619)
-8. `res/values/strings.xml` → `enable_musixmatch_lyrics`
+Total: **13 suntingan di 7 file + 1 file baru.** Spec Rev 1 menyebut 8 titik — itu **kurang**, karena `LyricsHelper` punya tiga struktur terpisah yang semuanya harus disunting.
 
-**Wajib dites manual:** `deserializeLyricsProviderOrder()` (~:634). Order tersimpan milik user lama mungkin tidak memuat provider baru → provider tidak pernah dipakai. Pastikan normalisasi menambahkan provider baru.
+Hanya **4 file** yang mereferensikan `PreferredLyricsProvider`, jadi cakupannya terbatas dan tidak ada risiko perubahan tersembunyi di tempat lain.
 
-Sambungkan `Musixmatch.logger` ke logger app **hanya di build debug**, dan pastikan tidak membocorkan token.
+### 7.1 Build wiring (2 suntingan)
 
----
+**`settings.gradle.kts`** — setelah baris 56 `include(":lyrics:youlyplus")`:
+```kotlin
+include(":lyrics:musixmatch")
+```
+
+**`app/build.gradle.kts`** — setelah baris 385 `implementation(project(":lyrics:youlyplus"))`:
+```kotlin
+implementation(project(":lyrics:musixmatch"))
+```
+
+### 7.2 `constants/PreferenceKeys.kt` (3 suntingan)
+
+**(a)** Setelah baris 212 `EnableUnisonLyricsKey`:
+```kotlin
+val EnableMusixmatchLyricsKey = booleanPreferencesKey("enableMusixmatchLyrics")
+```
+
+**(b)** Enum `PreferredLyricsProvider` — tambah setelah `PAXSENIX_MUSIXMATCH`:
+```kotlin
+MUSIXMATCH,
+```
+
+**(c)** `DefaultLyricsProviderOrder` — tambah setelah `PAXSENIX_MUSIXMATCH`:
+```kotlin
+PreferredLyricsProvider.MUSIXMATCH,
+```
+
+### 7.3 `lyrics/LyricsHelper.kt` (3 suntingan — bukan 1)
+
+**(a)** `baseProviders` (baris 66-82) — tambah sebelum `YouTubeSubtitleLyricsProvider`:
+```kotlin
+MusixmatchLyricsProvider,
+```
+
+**(b)** `providerPreferenceKeys` (baris 84-98) — tambah:
+```kotlin
+MusixmatchLyricsProvider to EnableMusixmatchLyricsKey,
+```
+
+**(c)** `providerMap` di dalam `orderedProviders()` (~baris 400-412) — tambah:
+```kotlin
+PreferredLyricsProvider.MUSIXMATCH to MusixmatchLyricsProvider,
+```
+
+Ketiganya wajib. Tanpa (a) provider tidak pernah masuk daftar; tanpa (b) toggle di Settings tidak berpengaruh; tanpa (c) urutan pilihan user diabaikan.
+
+### 7.4 `lyrics/LyricsProviderSettings.kt` (1 suntingan)
+
+`providerKeys` di `LyricsProviderSettingsRepository` — tambah, plus import `EnableMusixmatchLyricsKey`:
+```kotlin
+PreferredLyricsProvider.MUSIXMATCH to EnableMusixmatchLyricsKey,
+```
+
+### 7.5 `ui/screens/settings/LyricsSettings.kt` (2 suntingan — dipaksa compiler)
+
+Kedua fungsi adalah `when` **exhaustive** atas enum dalam posisi ekspresi. Menambah entry enum tanpa memperbaruinya = **compile error**. Jadi dua titik ini tidak mungkin terlupa.
+
+**(a)** `enableLabel()` (baris ~600):
+```kotlin
+PreferredLyricsProvider.MUSIXMATCH -> R.string.enable_musixmatch_lyrics
+```
+
+**(b)** `displayName()` (baris ~620):
+```kotlin
+PreferredLyricsProvider.MUSIXMATCH -> "Musixmatch"
+```
+
+`displayName` pakai literal untuk nama merek (seperti `"LrcLib"`, `"KuGou"`, `"BetterLyrics"`), bukan `stringResource`. Jangan pakai `stringResource` di sini.
+
+Catatan: `when (it)` di baris 368 adalah atas `LyricsMode`, **bukan** provider — jangan disentuh.
+
+### 7.6 `res/values/strings.xml` (1 suntingan)
+
+Setelah baris 587 `enable_binimum_lyrics`:
+```xml
+<string name="enable_musixmatch_lyrics">Enable Musixmatch lyrics</string>
+```
+
+**Hanya `values/strings.xml`.** Ada 46 locale lain — jangan disentuh, biarkan Crowdin yang menangani terjemahan.
+
+### 7.7 File baru: `lyrics/MusixmatchLyricsProvider.kt`
+
+Ikuti template `YouLyPlusLyricsProvider.kt` **persis**:
+
+```kotlin
+object MusixmatchLyricsProvider : LyricsProvider {
+    init {
+        Musixmatch.logger = { message ->
+            GlobalLog.append(Log.INFO, "Musixmatch", message)
+        }
+    }
+
+    override val name = "Musixmatch"
+
+    override fun isEnabled(context: Context): Boolean =
+        context.dataStore[EnableMusixmatchLyricsKey] ?: true
+
+    override suspend fun getLyrics(
+        id: String,
+        title: String,
+        artist: String,
+        album: String?,
+        duration: Int,
+    ): Result<String> =
+        Musixmatch.getLyrics(
+            title = title,
+            artist = artist,
+            album = album,
+            durationSeconds = duration,
+        )
+
+    override suspend fun getAllLyrics(
+        id: String,
+        title: String,
+        artist: String,
+        album: String?,
+        duration: Int,
+        callback: (String) -> Unit,
+    ) {
+        Musixmatch.getAllLyrics(
+            title = title,
+            artist = artist,
+            album = album,
+            durationSeconds = duration,
+            callback = callback,
+        )
+    }
+}
+```
+
+Jangan lupa license header dan import (`android.content.Context`, `android.util.Log`, `GlobalLog`, `dataStore`, `get`, `EnableMusixmatchLyricsKey`, `moe.rukamori.archivetune.musixmatch.Musixmatch`).
+
+**Koreksi spec Rev 1:** logger dipasang **tanpa syarat** di `init`, bukan hanya debug build. Itu konvensi repo (`YouLyPlusLyricsProvider` melakukan hal sama). Aman karena logger module sudah disanitasi dan diuji oleh `testLogger_neverReceivesTokenUrlBodyLyrics`.
+
+**Nama provider `"Musixmatch"`** sengaja berbeda dari `"Paxsenix: Musixmatch"` yang sudah ada, supaya keduanya bisa dibedakan user di Settings.
+
+### 7.8 KOREKSI PENTING — `deserializeLyricsProviderOrder` sudah aman
+
+Spec Rev 1 memperingatkan provider baru "berisiko tidak pernah dipakai" bagi user lama. **Itu salah.** Kode aktual sudah menanganinya:
+
+```kotlin
+val missing = DefaultLyricsProviderOrder.filterNot { it in normalized }
+return normalized + missing
+```
+
+Provider baru **otomatis ditambahkan** ke urutan tersimpan. Tidak perlu perubahan apa pun di fungsi itu.
+
+Nuansa yang tetap benar: karena ditambahkan lewat `missing`, provider baru mendarat di **akhir** urutan bagi user lama — jadi dicoba setelah semua provider lain. Itu perilaku yang wajar, bukan bug. Jangan "perbaiki" dengan menyisipkan di depan.
+
+### 7.9 Keputusan yang perlu diambil: default enabled?
+
+Template repo memakai `?: true` di dua tempat (`isEnabled` dan `providerKeys`), artinya provider baru **aktif secara default**.
+
+Kalau ingin lebih konservatif mengingat area ToS abu-abu, bisa pakai `?: false` — **tapi harus di kedua tempat**, kalau tidak UI dan runtime akan tidak sinkron. Rekomendasi: ikut konvensi `?: true`, dan sebutkan status ToS di deskripsi PR.
+
+### 7.10 Wajib uji manual (tidak bisa diotomasi)
+
+**(a) Round-trip word-sync.** Module `musixmatch` tidak boleh bergantung ke `betterlyrics`, jadi test di sana hanya memvalidasi XML via DOM. Rantai `TTMLParser.appendInterSpanText` -> `LyricsUtils.parseTtml` (filter `isNotEmpty`) -> `PrepareLyricsUseCase` (tanpa filter blank) harus diverifikasi di app: putar lagu ber-richsync, aktifkan word-sync, pastikan **tidak ada highlight/jeda kosong antar kata**.
+
+**(b) Provider muncul di Settings.** Buka Settings > Lyrics, pastikan "Musixmatch" tampil, toggle berfungsi, dan dialog urutan menampilkannya. Uji juga dengan data user lama (urutan tersimpan tanpa `MUSIXMATCH`) untuk konfirmasi §7.8.
+
+**(c) Fallback nyata.** Matikan provider lain, putar lagu yang tidak punya richsync, pastikan jatuh ke LRC lalu plain.
+
+### Acceptance Phase 6
+
+- `./gradlew :app:assembleDebug` sukses (repo utama **punya** wrapper, beda dari submodule)
+- Tidak ada `when` non-exhaustive
+- Provider tampil di Settings dan bisa di-toggle
+- Word-sync tampil tanpa kata kosong
+- Provider lama tidak berubah perilakunya
 
 ## 8. Ditunda (jangan kerjakan sekarang)
 
