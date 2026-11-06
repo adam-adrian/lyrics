@@ -188,7 +188,8 @@ class MusixmatchSearchConcurrencyTest {
             assertEquals(setOf(1, 2), setOf(entered.receive(), entered.receive()))
             releaseFirst.complete(Unit)
             withTimeout(1_000) { callbackStarted.await() }
-            assertSame(expected, failure { operation.await() })
+            withTimeout(1_000) { operation.join() }
+            assertSame(expected, operation.getCompletionExceptionOrNull())
             assertTrue(operation.isCancelled)
             assertEquals(1, callbackCount.get())
         } finally {
