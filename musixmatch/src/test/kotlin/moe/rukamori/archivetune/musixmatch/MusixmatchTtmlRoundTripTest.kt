@@ -6,7 +6,7 @@
  */
 package moe.rukamori.archivetune.musixmatch
 
-import moe.koiverse.rukamori.betterlyrics.TTMLParser
+import moe.rukamori.archivetune.betterlyrics.TTMLParser
 import moe.rukamori.archivetune.musixmatch.models.RichSyncLine
 import moe.rukamori.archivetune.musixmatch.models.RichSyncWord
 import org.junit.Assert.assertEquals
