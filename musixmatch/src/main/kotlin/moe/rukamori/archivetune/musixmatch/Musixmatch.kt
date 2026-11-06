@@ -33,6 +33,7 @@ import moe.rukamori.archivetune.musixmatch.models.LyricsBody
 import moe.rukamori.archivetune.musixmatch.models.MacroResponseBody
 import moe.rukamori.archivetune.musixmatch.models.MatcherBody
 import moe.rukamori.archivetune.musixmatch.models.RichSyncBody
+import moe.rukamori.archivetune.musixmatch.models.SearchBody
 import moe.rukamori.archivetune.musixmatch.models.TokenBody
 import moe.rukamori.archivetune.musixmatch.models.Track
 import moe.rukamori.archivetune.musixmatch.models.bodyAs
