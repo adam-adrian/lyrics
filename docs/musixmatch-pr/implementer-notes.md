@@ -83,3 +83,21 @@ Run live untuk Levitating, Dua Lipa, tanpa filter durasi berhasil mengambil keli
 Ini mengonfirmasi kelayakan API multi-kandidat pada satu sampel, bukan jaminan latency atau pengujian integrasi Kotlin/app. Script belum menguji konversi TTML/LRC produksi, callback UI, atau pembatalan saat deadline terlewati. Dengan input durasi `204`, filter akan membuang versi live/remix yang jauh lebih panjang; banyak kandidat search tidak selalu berarti banyak hasil yang layak ditampilkan. Token, URL lengkap, response body, dan lirik tidak ditulis ke output/file.
 
 Koreksi catatan sebelumnya: penolakan `token.get` pada probe terdahulu terjadi saat meminta token baru antar-probe, sehingga tidak membuktikan token sebelumnya tidak bisa dipakai lagi. Penyebab pasti payload `401` tersebut tidak terverifikasi.
+
+## 5. Implementasi multi-kandidat Search Lyrics
+
+`getAllLyrics()` sekarang memakai `track.search` dengan pool lima track, lalu memfilter ID tidak valid/duplikat, instrumental, dan selisih durasi lebih dari delapan detik jika durasi diketahui. Maksimal empat kandidat diproses dengan dua pekerjaan kandidat aktif. Macro menggunakan `track_id`; metadata matcher diperiksa kembali tanpa guard kemiripan teks playback.
+
+Hasil dikirim melalui callback segera setelah tiap kandidat selesai. Callback diserialkan; channel, dedup, cache hasil dua menit, dan timeout delapan detik tetap milik app. Format dipilih melalui konverter produksi bersama: richsync menjadi TTML, subtitle menjadi LRC, lalu plain. Search tidak menambah request richsync terpisah. Warm-up dan persistence belum ditambahkan.
+
+Renewal token dibatasi sekali per operasi search. Request yang menerima 401 boleh retry sekali menggunakan token baru bersama. Renewal gagal, token baru ditolak, dan 429 menghentikan operasi; kegagalan kandidat biasa tidak menghapus hasil kandidat lain. Exception transport search disanitasi sebelum keluar ke app. Cancellation dari parent maupun callback menghentikan seluruh pencarian.
+
+Review independen menemukan regresi early-exit playback, batas permit yang terlalu pendek, dan kegagalan renewal yang sempat diperlakukan sebagai kegagalan kandidat. Regresi playback dibuktikan gagal pada [run 42235279927](https://github.com/adam-adrian/lyrics/actions/runs/42235279927); kegagalan renewal dengan sibling tertahan dibuktikan pada [run 42236050352](https://github.com/adam-adrian/lyrics/actions/runs/42236050352). Setelah perbaikan, [run 42236664625](https://github.com/adam-adrian/lyrics/actions/runs/42236664625) lulus. Review juga menemukan callback `CancellationException` yang hanya membatalkan satu child; regression test gagal pada [run 42236955505](https://github.com/adam-adrian/lyrics/actions/runs/42236955505) sebelum perbaikannya.
+
+Build app awal dengan gitlink `b1697f4` lulus pada [run 42232663132](https://github.com/adam-adrian/ArchiveTune/actions/runs/42232663132). Itu belum membuktikan koreksi setelah review masuk APK. Verifikasi final dicatat setelah CI terbaru selesai.
+
+Tidak ada perangkat Android terhubung menurut `adb devices -l`, sehingga tampilan hasil, pemilihan kandidat, dan render di app belum diverifikasi untuk fitur multi-kandidat ini. CI dan smoke JVM tidak menggantikan pemeriksaan permukaan app tersebut.
+
+Verifikasi produksi pada [run 42237306045](https://github.com/adam-adrian/lyrics/actions/runs/42237306045), commit `741bc0a`, berhasil melalui implementasi Kotlin sebenarnya dan API live. Empat callback diterima: TTML pada 1.730 ms, TTML pada 1.805 ms, LRC pada 1.841 ms, dan TTML pada 1.991 ms sejak mulai operasi. TTML diparse sebagai XML dalam smoke sementara; tidak ada token, URL, atau teks lirik dicetak. Ini satu sampel runner GitHub, bukan janji latency perangkat. Smoke jaringan dan pengaturan stdout sementara dihapus setelah bukti diperoleh agar suite permanen tetap offline/deterministik.
+
+Reviewer error-handling memeriksa ulang koreksi cancellation dan menyatakan tidak ada temuan penting tersisa pada bagian tersebut. Ini review source, terpisah dari bukti runtime CI.
