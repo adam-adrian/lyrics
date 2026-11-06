@@ -232,8 +232,8 @@ class MusixmatchSearchConcurrencyTest {
                 }
             }
         }
-    }
 
+    }
     @Test
     fun simultaneousMacroUnauthorizedResponsesShareOneRenewalAndEachRetryOnce() = scenario {
         val oldRequests = Channel<Int>(Channel.UNLIMITED)
