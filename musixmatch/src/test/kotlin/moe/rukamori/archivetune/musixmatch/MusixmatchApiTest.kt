@@ -558,6 +558,35 @@ class MusixmatchApiTest {
         }
 
     @Test
+    fun playbackEarlyExitsDoNotRequestMissingRichsync() = runBlocking {
+        for (restricted in listOf(false, true)) {
+            val separateRequests = AtomicInteger()
+            Musixmatch.resetForTesting(MockEngine { request ->
+                if (request.url.encodedPath.endsWith("macro.subtitles.get")) {
+                    respond(
+                        jsonMacroResponse(
+                            instrumental = if (restricted) 0 else 1,
+                            restricted = if (restricted) 1 else 0,
+                        ).replace("\"richsync_body\": \"\"", "\"richsync_body\": null"),
+                        headers = jsonHeaders,
+                    )
+                } else {
+                    separateRequests.incrementAndGet()
+                    respond("{}", headers = jsonHeaders)
+                }
+            })
+            Musixmatch.cachedToken = "cached_playback_token"
+            val result = Musixmatch.getLyrics("Levitating", "Dua Lipa")
+            if (restricted) {
+                assertTrue(result.exceptionOrNull() is MusixmatchError.Restricted)
+            } else {
+                assertEquals("♪ Instrumental ♪", result.getOrNull())
+            }
+            assertEquals(0, separateRequests.get())
+        }
+    }
+
+    @Test
     fun testFallback_richsyncFails_fallsBackToLrc() =
         runBlocking {
             val subtitles =
