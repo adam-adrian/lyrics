@@ -25,7 +25,6 @@ import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
@@ -196,10 +195,46 @@ class MusixmatchSearchConcurrencyTest {
             assertTrue(failure is IllegalStateException)
             assertEquals(expected.message, failure?.message)
             assertTrue(operation.isCancelled)
+            assertEquals(1, callbackCount.get())
         } finally {
             cleanup(operation, releaseFirst, releaseSibling)
             entered.close()
         }
+    }
+
+    @Test
+    fun callbackCancellationCancelsEntireSearch() = scenario {
+        val callbacks = AtomicInteger()
+        install(MockEngine { request ->
+            if (request.url.encodedPath.endsWith("track.search")) {
+                respond(search(1, 2, 3), headers = jsonHeaders)
+            } else {
+                respond(macro(request.url.parameters["track_id"]!!.toInt()), headers = jsonHeaders)
+            }
+        })
+        val operation = async {
+            Musixmatch.getAllLyrics("Song", "Artist") {
+                callbacks.incrementAndGet()
+                throw kotlinx.coroutines.CancellationException("Collector stopped")
+            }
+        }
+        try {
+            operation.join()
+            assertTrue(operation.isCancelled)
+            assertEquals(1, callbacks.get())
+        } finally {
+            cleanup(operation)
+        }
+    }
+
+    @Test
+    fun failedSearchDoesNotExposeNetworkExceptionSecrets() = scenario {
+        val secret = "https://example.invalid/?usertoken=private-token"
+        install(MockEngine { throw IOException(secret) })
+        val error = failure { Musixmatch.getAllLyrics("Song", "Artist") {} }
+        assertTrue(error is MusixmatchError)
+        assertFalse(error.toString().contains(secret))
+        assertEquals(null, error.cause)
     }
 
     @Test
