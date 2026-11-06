@@ -356,6 +356,50 @@ class MusixmatchSearchConcurrencyTest {
     }
 
     @Test
+    fun renewalFailureStopsSearchEvenWhenSiblingHasNotRejectedToken() = scenario {
+        val entered = Channel<Int>(Channel.UNLIMITED)
+        val rejectFirst = CompletableDeferred<Unit>()
+        val releaseSibling = CompletableDeferred<Unit>()
+        val requested = ConcurrentLinkedQueue<Int>()
+        val callbacks = AtomicInteger()
+        install(MockEngine { request ->
+            when {
+                request.url.encodedPath.endsWith("track.search") ->
+                    respond(search(1, 2, 3, 4), headers = jsonHeaders)
+                request.url.encodedPath.endsWith("token.get") ->
+                    respond("", HttpStatusCode.ServiceUnavailable, jsonHeaders)
+                else -> {
+                    val id = request.url.parameters["track_id"]!!.toInt()
+                    requested.add(id)
+                    entered.send(id)
+                    if (id == 1) {
+                        rejectFirst.await()
+                        respond(status(401), headers = jsonHeaders)
+                    } else if (id == 2) {
+                        releaseSibling.await()
+                        respond(macro(id), headers = jsonHeaders)
+                    } else {
+                        respond(macro(id), headers = jsonHeaders)
+                    }
+                }
+            }
+        })
+        val operation = async {
+            Musixmatch.getAllLyrics("Song", "Artist") { callbacks.incrementAndGet() }
+        }
+        try {
+            assertEquals(setOf(1, 2), setOf(entered.receive(), entered.receive()))
+            rejectFirst.complete(Unit)
+            assertTrue(failure { operation.await() } is MusixmatchError.TokenInvalid)
+            assertEquals(setOf(1, 2), requested.toSet())
+            assertEquals(0, callbacks.get())
+        } finally {
+            cleanup(operation, rejectFirst, releaseSibling)
+            entered.close()
+        }
+    }
+
+    @Test
     fun failedSharedRenewalStopsBothCandidatesWithoutRetryOrSecondRenewal() = scenario {
         val entered = Channel<Int>(Channel.UNLIMITED)
         val releaseUnauthorized = CompletableDeferred<Unit>()
