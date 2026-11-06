@@ -33,29 +33,17 @@ import moe.rukamori.archivetune.musixmatch.models.LyricsBody
 import moe.rukamori.archivetune.musixmatch.models.MacroResponseBody
 import moe.rukamori.archivetune.musixmatch.models.MatcherBody
 import moe.rukamori.archivetune.musixmatch.models.RichSyncBody
-import moe.rukamori.archivetune.musixmatch.models.RichSyncLine
-import moe.rukamori.archivetune.musixmatch.models.SearchBody
-import moe.rukamori.archivetune.musixmatch.models.SubtitleLine
-import moe.rukamori.archivetune.musixmatch.models.SubtitlesBody
 import moe.rukamori.archivetune.musixmatch.models.TokenBody
 import moe.rukamori.archivetune.musixmatch.models.Track
 import moe.rukamori.archivetune.musixmatch.models.bodyAs
-import java.util.Locale
 import kotlin.math.abs
 
 object Musixmatch {
     private const val BASE_URL = "https://apic-appmobile.musixmatch.com/ws/1.1/"
     private const val APP_ID = "mac-ios-v2.0"
-    private const val DURATION_TOLERANCE = 8
     private const val SEARCH_PAGE_SIZE = 5
     private const val SEARCH_MAX_CANDIDATES = 4
     private const val SEARCH_CONCURRENCY = 2
-
-    private val LICENSE_FOOTER_PATTERNS =
-        listOf(
-            "this lyrics is not for commercial use",
-            "these lyrics are not for commercial use",
-        )
 
     private val jsonFormat by lazy {
         Json {
@@ -64,6 +52,8 @@ object Musixmatch {
             coerceInputValues = true
         }
     }
+
+    private val lyricsFormat by lazy { LyricsFormat(jsonFormat) }
 
     var logger: ((String) -> Unit)? = null
 
@@ -351,148 +341,6 @@ object Musixmatch {
             throw MusixmatchError.Mismatch("Track and artist both mismatched")
         }
     }
-    private fun resolveMacroLyrics(
-        calls: moe.rukamori.archivetune.musixmatch.models.MacroCalls?,
-        richSyncBodyStr: String? = null,
-    ): String {
-        val lyricsData = calls?.trackLyricsGet.bodyAs<LyricsBody>(jsonFormat)?.lyrics
-        if (lyricsData?.isRestricted == true) throw MusixmatchError.Restricted()
-
-        if (calls?.matcherTrackGet.bodyAs<MatcherBody>(jsonFormat)?.track?.isInstrumental == true) {
-            return "♪ Instrumental ♪"
-        }
-
-        val macroRichSync = calls?.trackRichsyncGet
-            ?.takeIf { it.message.header.statusCode == 200 }
-            .bodyAs<RichSyncBody>(jsonFormat)
-            ?.richsync?.richsyncBody
-        val richSync = richSyncBodyStr ?: macroRichSync
-        if (!richSync.isNullOrBlank()) {
-            val ttml = runCatching {
-                val lines = jsonFormat.decodeFromString<List<RichSyncLine>>(richSync)
-                MusixmatchTtml.convertRichSyncToTtml(lines)
-            }.getOrNull()
-            if (!ttml.isNullOrBlank()) return ttml
-        }
-
-        val subtitleBody = calls?.trackSubtitlesGet
-            ?.takeIf { it.message.header.statusCode == 200 }
-            .bodyAs<SubtitlesBody>(jsonFormat)
-            ?.subtitleList?.firstOrNull()?.subtitle?.subtitleBody
-        if (!subtitleBody.isNullOrBlank()) {
-            formatSubtitlesToLrc(subtitleBody)?.takeIf { it.isNotBlank() }?.let { return it }
-        }
-
-        val plain = calls?.trackLyricsGet
-            ?.takeIf { it.message.header.statusCode == 200 }
-            .bodyAs<LyricsBody>(jsonFormat)
-            ?.lyrics?.lyricsBody
-        if (!plain.isNullOrBlank()) {
-            cleanPlainLyrics(plain).takeIf { it.isNotBlank() }?.let { return it }
-        }
-        throw MusixmatchError.NoMatch("No lyrics found in any format")
-    }
-
-    private suspend fun <T> searchRequest(block: suspend () -> T): T =
-        try {
-            block()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: MusixmatchError) {
-            throw e
-        } catch (e: Exception) {
-            throw MusixmatchError.MalformedResponse("Search request failed")
-        }
-
-    private class SearchTokenState(initialToken: String) {
-        @Volatile
-        private var token = initialToken
-
-        @Volatile
-        private var terminalFailure: MusixmatchError? = null
-
-        private val renewalMutex = Mutex()
-        private var renewalUsed = false
-
-        suspend fun <T> execute(block: suspend (String) -> T): T {
-            terminalFailure?.let { throw it }
-            val previous = token
-            try {
-                return searchRequest { block(previous) }
-            } catch (e: MusixmatchError.RateLimited) {
-                terminalFailure = e
-                throw e
-            } catch (e: MusixmatchError.TokenInvalid) {
-                val retryToken = renewalMutex.withLock {
-                    terminalFailure?.let { throw it }
-                    if (token != previous) {
-                        token
-                    } else {
-                        if (renewalUsed) {
-                            terminalFailure = e
-                            throw e
-                        }
-                        renewalUsed = true
-                        try {
-                            token = searchRequest { renewToken(previous) }
-                        } catch (failure: CancellationException) {
-                            throw failure
-                        } catch (failure: Exception) {
-                            val terminal = if (failure is MusixmatchError.RateLimited) failure
-                                else MusixmatchError.TokenInvalid("Search token renewal failed")
-                            terminalFailure = terminal
-                            throw terminal
-                        }
-                        token
-                    }
-                }
-                terminalFailure?.let { throw it }
-                return try {
-                    searchRequest { block(retryToken) }
-                } catch (failure: MusixmatchError.TokenInvalid) {
-                    terminalFailure = failure
-                    throw failure
-                } catch (failure: MusixmatchError.RateLimited) {
-                    terminalFailure = failure
-                    throw failure
-                }
-            }
-        }
-    }
-
-    private fun formatLrcTimestamp(seconds: Double): String {
-        val ms = (seconds * 1000).toLong().coerceAtLeast(0L)
-        return String.format(
-            Locale.US,
-            "[%02d:%02d.%03d]",
-            ms / 60000L,
-            (ms % 60000L) / 1000L,
-            ms % 1000L,
-        )
-    }
-
-    private fun formatSubtitlesToLrc(subtitlesJson: String): String? =
-        runCatching {
-            val lines = jsonFormat.decodeFromString<List<SubtitleLine>>(subtitlesJson)
-            if (lines.isEmpty()) return null
-            lines
-                .joinToString("\n") { line ->
-                    val timestamp = formatLrcTimestamp(line.time?.total ?: 0.0)
-                    val text = line.text?.trim()?.ifEmpty { "♪" } ?: "♪"
-                    "$timestamp $text"
-                }.takeIf { it.isNotBlank() }
-        }.getOrNull()
-
-    private fun cleanPlainLyrics(rawBody: String): String {
-        val lines = rawBody.lines()
-        val filtered =
-            lines.filterNot { line ->
-                val lower = line.lowercase()
-                LICENSE_FOOTER_PATTERNS.any { lower.contains(it) }
-            }
-        return filtered.joinToString("\n").trim()
-    }
-
     suspend fun getLyrics(
         title: String,
         artist: String,
@@ -542,7 +390,7 @@ object Musixmatch {
             } else {
                 null
             }
-            val lyrics = resolveMacroLyrics(calls, additionalRichSync)
+            val lyrics = lyricsFormat.resolveMacroLyrics(calls, additionalRichSync)
             logger?.invoke("Musixmatch lyrics format resolved")
             Result.success(lyrics)
         } catch (e: CancellationException) {
@@ -563,20 +411,11 @@ object Musixmatch {
         val cleanArtist = artist.trim()
         if (cleanTitle.isBlank() || cleanArtist.isBlank()) return
 
-        val tokenState = SearchTokenState(searchRequest { getToken() })
+        val tokenState = SearchTokenState(searchRequest { getToken() }, ::renewToken)
         val searchBody = tokenState.execute { token ->
             executeTrackSearch(cleanTitle, cleanArtist, token)
         }
-        val candidates = searchBody.trackList
-            .mapNotNull { it.track }
-            .filter { track ->
-                track.trackId > 0 &&
-                    !track.isInstrumental &&
-                    (durationSeconds <= 0 || track.trackLength <= 0 ||
-                        abs(track.trackLength - durationSeconds) <= DURATION_TOLERANCE)
-            }
-            .distinctBy { it.trackId }
-            .take(SEARCH_MAX_CANDIDATES)
+        val candidates = selectSearchCandidates(searchBody, cleanTitle, durationSeconds, SEARCH_MAX_CANDIDATES)
 
         val semaphore = Semaphore(SEARCH_CONCURRENCY)
         val callbackMutex = Mutex()
@@ -607,7 +446,7 @@ object Musixmatch {
                             ) {
                                 throw MusixmatchError.Mismatch("Matcher metadata no longer matches candidate")
                             }
-                            resolveMacroLyrics(calls)
+                            lyricsFormat.resolveMacroLyrics(calls)
                         }
                     } catch (e: CancellationException) {
                         throw e
