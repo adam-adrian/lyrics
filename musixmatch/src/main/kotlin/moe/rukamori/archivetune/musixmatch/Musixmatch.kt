@@ -43,7 +43,7 @@ import kotlin.math.abs
 object Musixmatch {
     private const val BASE_URL = "https://apic-appmobile.musixmatch.com/ws/1.1/"
     private const val APP_ID = "mac-ios-v2.0"
-    private const val SEARCH_PAGE_SIZE = 5
+    private const val SEARCH_PAGE_SIZE = 20
     private const val SEARCH_MAX_CANDIDATES = 4
     private const val SEARCH_CONCURRENCY = 2
 
