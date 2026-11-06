@@ -274,43 +274,9 @@ object Musixmatch {
                 }
             }
 
-        if (response.status == HttpStatusCode.Unauthorized) {
-            throw MusixmatchError.TokenInvalid("HTTP 401 on macro")
-        }
-        if (response.status == HttpStatusCode.TooManyRequests) {
-            throw MusixmatchError.RateLimited("HTTP 429 on macro")
-        }
-        if (response.status.value >= 500) {
-            throw MusixmatchError.ServerError(response.status.value)
-        }
-        if (!response.status.isSuccess()) {
-            throw MusixmatchError.MalformedResponse("HTTP ${response.status.value} on macro")
-        }
-
-        val bodyText = response.bodyAsText()
-        val apiResponse =
-            runCatching {
-                jsonFormat.decodeFromString<ApiResponse<MacroResponseBody>>(bodyText)
-            }.getOrElse {
-                throw MusixmatchError.MalformedResponse("Failed to parse macro response")
-            }
-
-        val statusCode = apiResponse.message?.header?.statusCode ?: 0
-        if (statusCode == 401) {
-            throw MusixmatchError.TokenInvalid("Status code 401 on macro")
-        }
-        if (statusCode == 429) {
-            throw MusixmatchError.RateLimited("Status code 429 on macro")
-        }
-        if (statusCode >= 500) {
-            throw MusixmatchError.ServerError(statusCode)
-        }
-        if (statusCode != 200) {
-            throw MusixmatchError.MalformedResponse("Status code $statusCode on macro")
-        }
-
+        val body = decodeApiResponse<MacroResponseBody>(response, "macro")
         logger?.invoke("Musixmatch macro response received")
-        return apiResponse.message?.body ?: throw MusixmatchError.MalformedResponse("Empty macro body")
+        return body
     }
 
     private suspend fun fetchRichSyncSeparately(
@@ -425,35 +391,73 @@ object Musixmatch {
         }
         throw MusixmatchError.NoMatch("No lyrics found in any format")
     }
+
+    private suspend fun <T> searchRequest(block: suspend () -> T): T =
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: MusixmatchError) {
+            throw e
+        } catch (e: Exception) {
+            throw MusixmatchError.MalformedResponse("Search request failed")
+        }
+
     private class SearchTokenState(initialToken: String) {
         @Volatile
-        var token: String = initialToken
-            private set
+        private var token = initialToken
+
+        @Volatile
+        private var terminalFailure: MusixmatchError? = null
 
         private val renewalMutex = Mutex()
         private var renewalUsed = false
 
         suspend fun <T> execute(block: suspend (String) -> T): T {
+            terminalFailure?.let { throw it }
             val previous = token
             try {
-                return block(previous)
+                return searchRequest { block(previous) }
+            } catch (e: MusixmatchError.RateLimited) {
+                terminalFailure = e
+                throw e
             } catch (e: MusixmatchError.TokenInvalid) {
                 val retryToken = renewalMutex.withLock {
+                    terminalFailure?.let { throw it }
                     if (token != previous) {
                         token
                     } else {
-                        if (renewalUsed) throw e
+                        if (renewalUsed) {
+                            terminalFailure = e
+                            throw e
+                        }
                         renewalUsed = true
-                        token = renewToken(previous)
+                        try {
+                            token = searchRequest { renewToken(previous) }
+                        } catch (failure: CancellationException) {
+                            throw failure
+                        } catch (failure: Exception) {
+                            val terminal = if (failure is MusixmatchError.RateLimited) failure
+                                else MusixmatchError.TokenInvalid("Search token renewal failed")
+                            terminalFailure = terminal
+                            throw terminal
+                        }
                         token
                     }
                 }
-                return block(retryToken)
+                terminalFailure?.let { throw it }
+                return try {
+                    searchRequest { block(retryToken) }
+                } catch (failure: MusixmatchError.TokenInvalid) {
+                    terminalFailure = failure
+                    throw failure
+                } catch (failure: MusixmatchError.RateLimited) {
+                    terminalFailure = failure
+                    throw failure
+                }
             }
         }
     }
-
-
 
     private fun formatLrcTimestamp(seconds: Double): String {
         val ms = (seconds * 1000).toLong().coerceAtLeast(0L)
@@ -524,17 +528,20 @@ object Musixmatch {
             val matcherBody = matcherCall.bodyAs<MatcherBody>(jsonFormat)
             val track = matcherBody?.track
             validateMatch(track, cleanTitle, cleanArtist, durationSeconds)
-            val richSyncBodyObj = calls?.trackRichsyncGet.bodyAs<RichSyncBody>(jsonFormat)
-            val richSyncBodyStr =
-                richSyncBodyObj?.richsync?.richsyncBody
-                    ?: if (track != null && track.isRichsyncAvailable) {
-                        fetchRichSyncSeparately(track.commonTrackId, track.trackLength, currentToken)
-                    } else {
-                        null
-                    }
+            if (calls?.trackLyricsGet.bodyAs<LyricsBody>(jsonFormat)?.lyrics?.isRestricted == true) {
+                throw MusixmatchError.Restricted()
+            }
+            if (track?.isInstrumental == true) return Result.success("♪ Instrumental ♪")
 
-
-            val lyrics = resolveMacroLyrics(calls, richSyncBodyStr)
+            val macroRichSync = calls?.trackRichsyncGet
+                ?.takeIf { it.message.header.statusCode == 200 }
+                .bodyAs<RichSyncBody>(jsonFormat)?.richsync?.richsyncBody
+            val additionalRichSync = if (macroRichSync == null && track?.isRichsyncAvailable == true) {
+                fetchRichSyncSeparately(track.commonTrackId, track.trackLength, currentToken)
+            } else {
+                null
+            }
+            val lyrics = resolveMacroLyrics(calls, additionalRichSync)
             logger?.invoke("Musixmatch lyrics format resolved")
             Result.success(lyrics)
         } catch (e: CancellationException) {
@@ -555,7 +562,7 @@ object Musixmatch {
         val cleanArtist = artist.trim()
         if (cleanTitle.isBlank() || cleanArtist.isBlank()) return
 
-        val tokenState = SearchTokenState(getToken())
+        val tokenState = SearchTokenState(searchRequest { getToken() })
         val searchBody = tokenState.execute { token ->
             executeTrackSearch(cleanTitle, cleanArtist, token)
         }
@@ -576,30 +583,30 @@ object Musixmatch {
             candidates.forEach { candidate ->
                 launch {
                     val lyrics = try {
-                        currentCoroutineContext().ensureActive()
-                        val macroBody = semaphore.withPermit {
-                            tokenState.execute { token ->
+                        semaphore.withPermit {
+                            currentCoroutineContext().ensureActive()
+                            val macroBody = tokenState.execute { token ->
                                 executeMacroByTrackId(candidate.trackId, token)
                             }
+                            currentCoroutineContext().ensureActive()
+                            val calls = macroBody.macroCalls
+                            val matcherCall = calls?.matcherTrackGet
+                            val matcherStatus = matcherCall?.message?.header?.statusCode ?: 0
+                            if (matcherStatus != 200) {
+                                throw MusixmatchError.NoMatch("Matcher status code is $matcherStatus")
+                            }
+                            val matcherTrack = matcherCall.bodyAs<MatcherBody>(jsonFormat)?.track
+                            if (matcherTrack == null || matcherTrack.trackId != candidate.trackId) {
+                                throw MusixmatchError.Mismatch("Matcher track ID differs from requested ID")
+                            }
+                            if (matcherTrack.isInstrumental ||
+                                (durationSeconds > 0 && matcherTrack.trackLength > 0 &&
+                                    abs(matcherTrack.trackLength - durationSeconds) > DURATION_TOLERANCE)
+                            ) {
+                                throw MusixmatchError.Mismatch("Matcher metadata no longer matches candidate")
+                            }
+                            resolveMacroLyrics(calls)
                         }
-                        currentCoroutineContext().ensureActive()
-                        val calls = macroBody.macroCalls
-                        val matcherCall = calls?.matcherTrackGet
-                        val matcherStatus = matcherCall?.message?.header?.statusCode ?: 0
-                        if (matcherStatus != 200) {
-                            throw MusixmatchError.NoMatch("Matcher status code is $matcherStatus")
-                        }
-                        val matcherTrack = matcherCall.bodyAs<MatcherBody>(jsonFormat)?.track
-                        if (matcherTrack == null || matcherTrack.trackId != candidate.trackId) {
-                            throw MusixmatchError.Mismatch("Matcher track ID differs from requested ID")
-                        }
-                        if (matcherTrack.isInstrumental ||
-                            (durationSeconds > 0 && matcherTrack.trackLength > 0 &&
-                                abs(matcherTrack.trackLength - durationSeconds) > DURATION_TOLERANCE)
-                        ) {
-                            throw MusixmatchError.Mismatch("Matcher metadata no longer matches candidate")
-                        }
-                        resolveMacroLyrics(calls)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: MusixmatchError.TokenInvalid) {
@@ -612,7 +619,10 @@ object Musixmatch {
                     }
                     if (lyrics != null) {
                         currentCoroutineContext().ensureActive()
-                        callbackMutex.withLock { callback(lyrics) }
+                        callbackMutex.withLock {
+                            currentCoroutineContext().ensureActive()
+                            callback(lyrics)
+                        }
                     }
                 }
             }

@@ -75,6 +75,7 @@ class MusixmatchApiTest {
         instrumental: Int = 0,
         restricted: Int = 0,
         richsyncBodyJson: String? = null,
+        richsyncStatus: Int = 200,
         subtitleBodyJson: String? = null,
         lyricsBodyText: String? = "I got you, moonlight, you're my starlight",
     ): String {
@@ -135,7 +136,7 @@ class MusixmatchApiTest {
                         },
                         "track.richsync.get": {
                             "message": {
-                                "header": { "status_code": 200 },
+                                "header": { "status_code": $richsyncStatus },
                                 "body": {
                                     "richsync": {
                                         "richsync_id": 8888,
@@ -584,6 +585,23 @@ class MusixmatchApiTest {
             }
             assertEquals(0, separateRequests.get())
         }
+    }
+
+    @Test
+    fun playbackRejectsRichsyncFromFailedSubcall() = runBlocking {
+        Musixmatch.resetForTesting(MockEngine {
+            respond(
+                jsonMacroResponse(
+                    hasRichsync = 0,
+                    richsyncStatus = 404,
+                    richsyncBodyJson = """[{"ts":1.0,"te":3.0,"l":[{"c":"Wrong format","o":0.0}],"x":"Wrong format"}]""",
+                    subtitleBodyJson = """[{"text":"Valid fallback","time":{"total":2.0}}]""",
+                ),
+                headers = jsonHeaders,
+            )
+        })
+        Musixmatch.cachedToken = "cached_playback_token"
+        assertEquals("[00:02.000] Valid fallback", Musixmatch.getLyrics("Levitating", "Dua Lipa").getOrThrow())
     }
 
     @Test
