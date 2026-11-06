@@ -39,11 +39,21 @@ class MusixmatchSearchSelectionTest {
         assertEquals(4, result.lyrics.size)
         assertRouting(result, setOf(1, 2, 3, 4))
         val parameters = result.requests.single { it.encodedPath.endsWith("track.search") }.parameters
-        assertEquals("5", parameters["page_size"])
+        assertEquals("20", parameters["page_size"])
         assertEquals("1", parameters["f_has_lyrics"])
         assertEquals("Song", parameters["q_track"])
         assertEquals("Artist", parameters["q_artist"])
         assertEquals("Artist", parameters["q_artists"])
+    }
+
+    @Test
+    fun eligibleCandidateAfterFifthResponseEntryStillGetsFetched() = runBlocking {
+        val result = search(
+            (1..6).map { track(it, length = 109) } + track(7, length = 100),
+            duration = 100,
+        )
+        assertEquals(listOf("Candidate 7"), result.lyrics)
+        assertRouting(result, setOf(7))
     }
 
     @Test
