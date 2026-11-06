@@ -230,9 +230,7 @@ class MusixmatchSearchConcurrencyTest {
                 } finally {
                     cleanup(operation)
                 }
-            }
         }
-
     }
     @Test
     fun simultaneousMacroUnauthorizedResponsesShareOneRenewalAndEachRetryOnce() = scenario {
