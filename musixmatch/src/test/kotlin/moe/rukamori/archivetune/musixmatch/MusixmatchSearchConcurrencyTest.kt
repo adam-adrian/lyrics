@@ -160,6 +160,7 @@ class MusixmatchSearchConcurrencyTest {
     fun callbackExceptionEscapesAndCancelsBlockedSibling() = scenario {
         val entered = Channel<Int>(Channel.UNLIMITED)
         val callbackStarted = CompletableDeferred<Unit>()
+        val completion = CompletableDeferred<Throwable?>()
         val releaseFirst = CompletableDeferred<Unit>()
         val releaseSibling = CompletableDeferred<Unit>()
         val callbackCount = AtomicInteger()
@@ -179,19 +180,22 @@ class MusixmatchSearchConcurrencyTest {
         })
         val operation = async {
             Musixmatch.getAllLyrics("Song", "Artist") {
-                callbackCount.incrementAndGet()
-                callbackStarted.complete(Unit)
-                throw expected
+                if (callbackCount.incrementAndGet() == 1) {
+                    callbackStarted.complete(Unit)
+                    throw expected
+                }
             }
         }
+        operation.invokeOnCompletion { completion.complete(it) }
         try {
             assertEquals(setOf(1, 2), setOf(entered.receive(), entered.receive()))
             releaseFirst.complete(Unit)
             withTimeout(1_000) { callbackStarted.await() }
-            withTimeout(1_000) { operation.join() }
-            assertSame(expected, operation.getCompletionExceptionOrNull())
+            releaseSibling.complete(Unit)
+            val failure = withTimeout(1_000) { completion.await() }
+            assertTrue(failure is IllegalStateException)
+            assertEquals(expected.message, failure?.message)
             assertTrue(operation.isCancelled)
-            assertEquals(1, callbackCount.get())
         } finally {
             cleanup(operation, releaseFirst, releaseSibling)
             entered.close()
