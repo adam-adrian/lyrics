@@ -67,3 +67,19 @@ Dokumen ini mencatat temuan teknis riil hasil *smoke test* langsung ke endpoint 
    * Durasi beda > 8 detik tertolak sebagai `MusixmatchError.Mismatch`.
    * Title & artist beda jauh tertolak sebagai `MusixmatchError.Mismatch`.
    * Lagu tidak ada di Musixmatch menghasilkan `matcher.track.get` status `404` → `MusixmatchError.NoMatch`.
+
+## 4. Probe search otomatis, 6 Nov 2026
+
+Script [probe-search.mjs](./probe-search.mjs) menjalankan token → `track.search` → fetch macro tiap kandidat memakai `track_id`. Satu token dipakai ulang untuk seluruh request. Script membatasi lima kandidat dan dua fetch paralel, dengan deadline total 8 detik termasuk pengambilan token.
+
+Perintah dari root repo:
+
+```sh
+bun docs/musixmatch-pr/probe-search.mjs
+```
+
+Run live untuk Levitating, Dua Lipa, tanpa filter durasi berhasil mengambil kelima kandidat dalam 6.357 ms, dengan hasil pertama pada 4.746 ms. Pengambilan token memakan 3.451 ms dan search 770 ms. Semua matcher cocok dengan ID yang diminta. Empat kandidat punya richsync; Live From Mexico punya subtitle meskipun sub-call richsync `404`. Script keluar dengan kode `0` dan `allEligibleSucceeded=true`.
+
+Ini mengonfirmasi kelayakan API multi-kandidat pada satu sampel, bukan jaminan latency atau pengujian integrasi Kotlin/app. Script belum menguji konversi TTML/LRC produksi, callback UI, atau pembatalan saat deadline terlewati. Dengan input durasi `204`, filter akan membuang versi live/remix yang jauh lebih panjang; banyak kandidat search tidak selalu berarti banyak hasil yang layak ditampilkan. Token, URL lengkap, response body, dan lirik tidak ditulis ke output/file.
+
+Koreksi catatan sebelumnya: penolakan `token.get` pada probe terdahulu terjadi saat meminta token baru antar-probe, sehingga tidak membuktikan token sebelumnya tidak bisa dipakai lagi. Penyebab pasti payload `401` tersebut tidak terverifikasi.
