@@ -285,11 +285,14 @@ class MusixmatchSearchSelectionTest {
     }
 
     @Test
-    fun emptySearchOrEntirelyFilteredPoolMakesNoMacroRequests() = runBlocking {
+    fun emptySearchOrEntirelyFilteredPoolAttemptsTitleMatcher() = runBlocking {
         for (tracks in listOf(emptyList(), listOf(track(0), track(1, instrumental = 1), track(2, length = 109)))) {
             val result = search(tracks, duration = 100)
             assertTrue(result.lyrics.isEmpty())
-            assertRouting(result, emptySet())
+            val titleMacros = result.requests.filter { it.encodedPath.endsWith("macro.subtitles.get") }
+            assertEquals(1, titleMacros.size)
+            assertEquals(null, titleMacros.single().parameters["track_id"])
+            assertEquals(2, result.requests.size)
         }
     }
 
@@ -312,7 +315,7 @@ class MusixmatchSearchSelectionTest {
                 )
                 request.url.encodedPath.endsWith("macro.subtitles.get") -> {
                     val id = request.url.parameters["track_id"]?.toIntOrNull() ?: 0
-                    respond(macros[id] ?: macro(id), headers = jsonHeaders)
+                    respond(macros[id] ?: macro(id, matcherStatus = if (id == 0) 404 else 200), headers = jsonHeaders)
                 }
                 else -> respond("{}", HttpStatusCode.NotFound, jsonHeaders)
             }

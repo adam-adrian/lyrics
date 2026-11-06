@@ -408,6 +408,8 @@ class MusixmatchApiTest {
                 MockEngine { request ->
                     if (request.url.encodedPath.endsWith("token.get")) {
                         respond(jsonTokenResponse(), HttpStatusCode.OK, jsonHeaders)
+                    } else if (request.url.encodedPath.endsWith("track.search")) {
+                        respond("""{"message":{"header":{"status_code":200},"body":{"track_list":[]}}}""", HttpStatusCode.OK, jsonHeaders)
                     } else {
                         respond(jsonMacroResponse(trackLength = 204), HttpStatusCode.OK, jsonHeaders)
                     }
@@ -416,7 +418,7 @@ class MusixmatchApiTest {
 
             val result = Musixmatch.getLyrics("Levitating", "Dua Lipa", durationSeconds = 100)
             assertTrue(result.isFailure)
-            assertTrue(result.exceptionOrNull() is MusixmatchError.Mismatch)
+            assertTrue(result.exceptionOrNull() is MusixmatchError.NoMatch)
         }
 
     @Test
@@ -469,6 +471,8 @@ class MusixmatchApiTest {
                 MockEngine { request ->
                     if (request.url.encodedPath.endsWith("token.get")) {
                         respond(jsonTokenResponse(), HttpStatusCode.OK, jsonHeaders)
+                    } else if (request.url.encodedPath.endsWith("track.search")) {
+                        respond("""{"message":{"header":{"status_code":200},"body":{"track_list":[]}}}""", HttpStatusCode.OK, jsonHeaders)
                     } else {
                         respond(
                             jsonMacroResponse(trackName = "Different", artistName = "Unrelated"),
@@ -481,7 +485,7 @@ class MusixmatchApiTest {
 
             val result = Musixmatch.getLyrics("Levitating", "Dua Lipa")
             assertTrue(result.isFailure)
-            assertTrue(result.exceptionOrNull() is MusixmatchError.Mismatch)
+            assertTrue(result.exceptionOrNull() is MusixmatchError.NoMatch)
         }
 
     @Test
@@ -491,6 +495,8 @@ class MusixmatchApiTest {
                 MockEngine { request ->
                     if (request.url.encodedPath.endsWith("token.get")) {
                         respond(jsonTokenResponse(), HttpStatusCode.OK, jsonHeaders)
+                    } else if (request.url.encodedPath.endsWith("track.search")) {
+                        respond("""{"message":{"header":{"status_code":200},"body":{"track_list":[]}}}""", HttpStatusCode.OK, jsonHeaders)
                     } else {
                         respond(
                             jsonMacroResponse(trackName = "Song", artistName = "Artist"),
@@ -503,7 +509,7 @@ class MusixmatchApiTest {
 
             val result = Musixmatch.getLyrics("!!!", "???")
             assertTrue(result.isFailure)
-            assertTrue(result.exceptionOrNull() is MusixmatchError.Mismatch)
+            assertTrue(result.exceptionOrNull() is MusixmatchError.NoMatch)
         }
 
     @Test
@@ -672,6 +678,8 @@ class MusixmatchApiTest {
                 MockEngine { request ->
                     if (request.url.encodedPath.endsWith("token.get")) {
                         respond(jsonTokenResponse(), HttpStatusCode.OK, jsonHeaders)
+                    } else if (request.url.encodedPath.endsWith("track.search")) {
+                        respond("""{"message":{"header":{"status_code":200},"body":{"track_list":[]}}}""", HttpStatusCode.OK, jsonHeaders)
                     } else {
                         respond(
                             jsonMacroResponse(
