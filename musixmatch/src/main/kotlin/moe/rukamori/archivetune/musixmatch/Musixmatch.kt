@@ -292,12 +292,21 @@ object Musixmatch {
                     parameter("usertoken", token)
                 }
 
+            if (response.status == HttpStatusCode.Unauthorized) throw MusixmatchError.TokenInvalid("HTTP 401 on richsync")
+            if (response.status == HttpStatusCode.TooManyRequests) throw MusixmatchError.RateLimited("HTTP 429 on richsync")
             if (!response.status.isSuccess()) return null
             val bodyText = response.bodyAsText()
             val apiResponse = jsonFormat.decodeFromString<ApiResponse<RichSyncBody>>(bodyText)
-            if (apiResponse.message?.header?.statusCode != 200) return null
+            val status = apiResponse.message?.header?.statusCode
+            if (status == 401) throw MusixmatchError.TokenInvalid("Status code 401 on richsync")
+            if (status == 429) throw MusixmatchError.RateLimited("Status code 429 on richsync")
+            if (status != 200) return null
             apiResponse.message?.body?.richsync?.richsyncBody
         } catch (e: CancellationException) {
+            throw e
+        } catch (e: MusixmatchError.TokenInvalid) {
+            throw e
+        } catch (e: MusixmatchError.RateLimited) {
             throw e
         } catch (e: Exception) {
             null
@@ -459,7 +468,7 @@ object Musixmatch {
                             ) {
                                 throw MusixmatchError.Mismatch("Matcher metadata no longer matches candidate")
                             }
-                            lyricsFormat.resolveMacroLyrics(calls)
+                            resolveTrackLyrics(calls, matcherTrack, tokenState)
                         }
                     } catch (e: CancellationException) {
                         throw e
