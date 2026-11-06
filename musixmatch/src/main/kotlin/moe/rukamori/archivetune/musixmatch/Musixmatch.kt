@@ -18,6 +18,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -580,6 +581,7 @@ object Musixmatch {
         val semaphore = Semaphore(SEARCH_CONCURRENCY)
         val callbackMutex = Mutex()
         coroutineScope {
+            val searchScope = this
             candidates.forEach { candidate ->
                 launch {
                     val lyrics = try {
@@ -621,7 +623,12 @@ object Musixmatch {
                         currentCoroutineContext().ensureActive()
                         callbackMutex.withLock {
                             currentCoroutineContext().ensureActive()
-                            callback(lyrics)
+                            try {
+                                callback(lyrics)
+                            } catch (e: CancellationException) {
+                                searchScope.cancel(e)
+                                throw e
+                            }
                         }
                     }
                 }

@@ -16,3 +16,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.ktor.client.mock)
 }
+
+tasks.withType<Test>().configureEach {
+    testLogging.showStandardStreams = true
+}
