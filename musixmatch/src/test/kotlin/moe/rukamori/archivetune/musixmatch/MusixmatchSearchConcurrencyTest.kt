@@ -195,7 +195,7 @@ class MusixmatchSearchConcurrencyTest {
     }
 
     @Test
-    fun serverMalformedAndNetworkFailuresEachPreserveOtherCandidates() {
+    fun serverMalformedAndNetworkFailuresEachPreserveOtherCandidates() = scenario {
         for (kind in listOf("server", "malformed", "network")) {
                 val requests = ConcurrentHashMap<Int, AtomicInteger>()
                 val emitted = ConcurrentLinkedQueue<String>()
