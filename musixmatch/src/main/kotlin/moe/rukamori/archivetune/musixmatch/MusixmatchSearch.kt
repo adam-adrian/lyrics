@@ -27,7 +27,44 @@ internal fun selectSearchCandidates(
                 abs(track.trackLength - durationSeconds) <= DURATION_TOLERANCE)
     }
     .distinctBy { it.trackId }
-    .take(limit)
+    .let { tracks ->
+        val inputMarkers = versionMarkers(inputTitle)
+        tracks.map { track -> RankedTrack(track, versionDemerit(track, inputMarkers)) }
+            .sortedWith(compareBy<RankedTrack> { it.demerit }.thenByDescending { it.track.trackRating })
+            .take(limit)
+            .map { it.track }
+    }
+
+
+private data class RankedTrack(val track: Track, val demerit: Int)
+
+private val qualifierPattern = Regex("""\([^)]*\)|\[[^]]*\]| [-–] (.+)$""")
+private val markerPattern = Regex("""(?i)(?<![\p{L}\p{N}])(?:remix|live|covers?|instrumental|acoustic|arrangement|tribute|karaoke)(?![\p{L}\p{N}])""")
+
+private fun versionMarkers(text: String): Int {
+    var markers = 0
+    for (match in markerPattern.findAll(text)) {
+        markers = markers or when (match.value.lowercase(java.util.Locale.ROOT)) {
+            "remix" -> 1
+            "live" -> 2
+            "cover", "covers" -> 4
+            "instrumental" -> 8
+            "acoustic" -> 16
+            "arrangement" -> 32
+            "tribute" -> 64
+            else -> 128
+        }
+    }
+    return markers
+}
+
+private fun versionDemerit(track: Track, inputMarkers: Int): Int {
+    var markers = versionMarkers(track.albumName) and 4
+    for (qualifier in qualifierPattern.findAll(track.trackName)) {
+        markers = markers or versionMarkers(qualifier.value)
+    }
+    return if (markers and inputMarkers.inv() != 0) 1 else 0
+}
 
 internal suspend fun Musixmatch.resolveSearchFallback(
     tokenState: SearchTokenState,

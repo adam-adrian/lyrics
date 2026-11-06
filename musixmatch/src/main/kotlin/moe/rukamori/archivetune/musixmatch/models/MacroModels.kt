@@ -54,6 +54,8 @@ data class Track(
     @SerialName("commontrack_id") val commonTrackId: Long = 0,
     @SerialName("track_name") val trackName: String = "",
     @SerialName("artist_name") val artistName: String = "",
+    @SerialName("album_name") val albumName: String = "",
+    @SerialName("track_rating") val trackRating: Int = 0,
     @SerialName("track_length") val trackLength: Int = 0,
     @SerialName("has_richsync") val hasRichsync: Int = 0,
     @SerialName("has_subtitles") val hasSubtitles: Int = 0,
