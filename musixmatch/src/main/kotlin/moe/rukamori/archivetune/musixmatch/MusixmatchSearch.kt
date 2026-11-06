@@ -21,11 +21,7 @@ internal fun selectSearchCandidates(
     limit: Int,
 ): List<Track> = body.trackList
     .mapNotNull { it.track }
-    .filter { track ->
-        track.trackId > 0 && !track.isInstrumental &&
-            (durationSeconds <= 0 || track.trackLength <= 0 ||
-                abs(track.trackLength - durationSeconds) <= DURATION_TOLERANCE)
-    }
+    .filter { track -> isSearchCandidate(track, durationSeconds) }
     .distinctBy { it.trackId }
     .let { tracks ->
         val inputMarkers = versionMarkers(inputTitle)
@@ -35,7 +31,57 @@ internal fun selectSearchCandidates(
             .map { it.track }
     }
 
+private fun isSearchCandidate(track: Track, durationSeconds: Int): Boolean =
+    track.trackId > 0 && !track.isInstrumental &&
+        (durationSeconds <= 0 || track.trackLength <= 0 ||
+            abs(track.trackLength - durationSeconds) <= DURATION_TOLERANCE)
 
+internal fun Musixmatch.logSearchFunnel(body: SearchBody, durationSeconds: Int, selectedCount: Int) {
+    logger?.let { log ->
+        val eligible = body.trackList.count { it.track?.let { track -> isSearchCandidate(track, durationSeconds) } == true }
+        log("Musixmatch search: returned=${body.trackList.size} eligible=$eligible candidates=$selectedCount")
+    }
+}
+
+private fun normalizeString(value: String): String =
+    value.filter { it.isLetterOrDigit() }.lowercase()
+
+internal fun validateMatch(
+    track: Track?,
+    inputTitle: String,
+    inputArtist: String,
+    inputDuration: Int,
+) {
+    if (track == null) {
+        throw MusixmatchError.NoMatch("No track matched")
+    }
+
+    if (inputDuration > 0 && track.trackLength > 0) {
+        if (abs(track.trackLength - inputDuration) > DURATION_TOLERANCE) {
+            throw MusixmatchError.Mismatch(
+                "Track length ${track.trackLength} differs from input $inputDuration by > $DURATION_TOLERANCE",
+            )
+        }
+    }
+
+    val normTrackTitle = normalizeString(track.trackName)
+    val normInputTitle = normalizeString(inputTitle)
+    val normTrackArtist = normalizeString(track.artistName)
+    val normInputArtist = normalizeString(inputArtist)
+
+    val titleOk =
+        normTrackTitle.isNotEmpty() &&
+            normInputTitle.isNotEmpty() &&
+            (normTrackTitle.contains(normInputTitle) || normInputTitle.contains(normTrackTitle))
+    val artistOk =
+        normTrackArtist.isNotEmpty() &&
+            normInputArtist.isNotEmpty() &&
+            (normTrackArtist.contains(normInputArtist) || normInputArtist.contains(normTrackArtist))
+
+    if (!titleOk && !artistOk) {
+        throw MusixmatchError.Mismatch("Track and artist both mismatched")
+    }
+}
 private data class RankedTrack(val track: Track, val demerit: Int)
 
 private val qualifierPattern = Regex("""\([^)]*\)|\[[^]]*\]| [-–] (.+)$""")

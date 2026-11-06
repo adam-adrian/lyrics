@@ -313,45 +313,6 @@ object Musixmatch {
         }
     }
 
-    private fun normalizeString(value: String): String =
-        value.filter { it.isLetterOrDigit() }.lowercase()
-
-    internal fun validateMatch(
-        track: Track?,
-        inputTitle: String,
-        inputArtist: String,
-        inputDuration: Int,
-    ) {
-        if (track == null) {
-            throw MusixmatchError.NoMatch("No track matched")
-        }
-
-        if (inputDuration > 0 && track.trackLength > 0) {
-            if (abs(track.trackLength - inputDuration) > DURATION_TOLERANCE) {
-                throw MusixmatchError.Mismatch(
-                    "Track length ${track.trackLength} differs from input $inputDuration by > $DURATION_TOLERANCE",
-                )
-            }
-        }
-
-        val normTrackTitle = normalizeString(track.trackName)
-        val normInputTitle = normalizeString(inputTitle)
-        val normTrackArtist = normalizeString(track.artistName)
-        val normInputArtist = normalizeString(inputArtist)
-
-        val titleOk =
-            normTrackTitle.isNotEmpty() &&
-                normInputTitle.isNotEmpty() &&
-                (normTrackTitle.contains(normInputTitle) || normInputTitle.contains(normTrackTitle))
-        val artistOk =
-            normTrackArtist.isNotEmpty() &&
-                normInputArtist.isNotEmpty() &&
-                (normTrackArtist.contains(normInputArtist) || normInputArtist.contains(normTrackArtist))
-
-        if (!titleOk && !artistOk) {
-            throw MusixmatchError.Mismatch("Track and artist both mismatched")
-        }
-    }
     internal fun matchedTrack(calls: MacroCalls?, expectedTrackId: Long? = null): Track {
         val matcherCall = calls?.matcherTrackGet
         val status = matcherCall?.message?.header?.statusCode ?: 0
@@ -429,6 +390,7 @@ object Musixmatch {
             executeTrackSearch(cleanTitle, cleanArtist, token)
         }
         val candidates = selectSearchCandidates(searchBody, cleanTitle, durationSeconds, SEARCH_MAX_CANDIDATES)
+        logSearchFunnel(searchBody, durationSeconds, candidates.size)
 
         if (candidates.isEmpty()) {
             resolveTitleFallbackForSearch(tokenState, cleanTitle, cleanArtist, album?.trim().orEmpty(), durationSeconds)

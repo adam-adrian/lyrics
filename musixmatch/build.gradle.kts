@@ -13,6 +13,7 @@ dependencies {
     implementation(libs.ktor.serialization.json)
     implementation(libs.ktor.client.encoding)
 
+    testImplementation(project(":betterlyrics"))
     testImplementation(libs.junit)
     testImplementation(libs.ktor.client.mock)
 }
