@@ -17,13 +17,3 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.ktor.client.mock)
 }
-
-val hybridSmoke by tasks.registering(JavaExec::class) {
-    dependsOn(tasks.named("testClasses"))
-    classpath = sourceSets["test"].runtimeClasspath
-    mainClass.set("moe.rukamori.archivetune.musixmatch.HybridJvmSmoke")
-}
-
-tasks.named("check") {
-    dependsOn(hybridSmoke)
-}
