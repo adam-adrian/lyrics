@@ -145,3 +145,7 @@ Smoke juga memeriksa urutan endpoint, ranking sebelum cap dua kandidat playback,
 Commit `f86fbc77d9cfd7cfc825b1dea556551e080752f0` menghapus runner sementara tanpa mengubah kode hybrid. CI [42317619028](https://github.com/adam-adrian/lyrics/actions/runs/42317619028) lulus setelah cleanup. Regression suite permanen dan test round-trip tetap dipertahankan.
 
 Pemeriksaan source: tidak ada import Android atau perubahan version catalog; dependency tambahan hanya untuk test; seluruh file Kotlin baru memiliki header GPL ArchiveTune. `Musixmatch.kt` berisi 461 baris dan helper produksi lainnya di bawah 500 baris. Integrasi gitlink app, APK hybrid, API live hybrid, dan render perangkat tidak dikerjakan dalam paket ini.
+
+### Koreksi dependency saat integrasi app
+
+CI app `42319573238` gagal saat konfigurasi Gradle: test dependency absolut `:betterlyrics` tidak tersedia karena app memasang modul sebagai `:lyrics:betterlyrics`. Dependency test Musixmatch sekarang mengikuti parent project path, sehingga standalone memakai `:betterlyrics` dan integrasi app memakai `:lyrics:betterlyrics`. Dependency tetap khusus test; kode provider tidak berubah. Verifikasi build berikutnya dilakukan melalui CI GitHub, tanpa Gradle lokal.
