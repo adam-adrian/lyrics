@@ -84,7 +84,7 @@ Ini mengonfirmasi kelayakan API multi-kandidat pada satu sampel, bukan jaminan l
 
 Koreksi catatan sebelumnya: penolakan `token.get` pada probe terdahulu terjadi saat meminta token baru antar-probe, sehingga tidak membuktikan token sebelumnya tidak bisa dipakai lagi. Penyebab pasti payload `401` tersebut tidak terverifikasi.
 
-## 5. Implementasi multi-kandidat Search Lyrics
+## 5. Implementasi multi-kandidat Search Lyrics (sebelum hybrid)
 
 `getAllLyrics()` sekarang memakai `track.search` dengan pool lima track, lalu memfilter ID tidak valid/duplikat, instrumental, dan selisih durasi lebih dari delapan detik jika durasi diketahui. Maksimal empat kandidat diproses dengan dua pekerjaan kandidat aktif. Macro menggunakan `track_id`; metadata matcher diperiksa kembali tanpa guard kemiripan teks playback.
 
@@ -105,3 +105,43 @@ Reviewer error-handling memeriksa ulang koreksi cancellation dan menyatakan tida
 Verifikasi final setelah smoke sementara dihapus: [CI module 42237676322](https://github.com/adam-adrian/lyrics/actions/runs/42237676322) lulus pada `fd866c0`. Repo app menunjuk module tersebut melalui gitlink commit `c76edf420`; [CI app 42237722810](https://github.com/adam-adrian/ArchiveTune/actions/runs/42237722810) berhasil membangun Mobile Arm64 Debug APK dan menyelesaikan pengiriman melalui MTProto. Build dapat dikenali melalui commit app `c76edf420`. Perubahan notes setelah itu hanya dokumentasi dan tidak memerlukan gitlink kode baru.
 
 Smoke perangkat yang masih perlu dilakukan: install APK tersebut, aktifkan hanya Musixmatch sementara untuk membedakan sumber hasil, jalankan Search Lyrics pada lagu yang memiliki beberapa versi dalam toleransi durasi, lalu pilih hasil yang muncul dan periksa render/sinkronisasi. Ulangi dengan force refresh atau setelah cache dua menit habis. Periksa toggle off dan playback biasa. Hasil boleh kurang dari empat karena filter, error, atau dedup; empat adalah batas kandidat, bukan janji jumlah hasil UI.
+
+## 6. Implementasi hybrid Musixmatch, 7 Nov 2026
+
+Commit kode: `143184b30738174019c8dc2d68654afd6ce4bfdb` pada branch `feat/musixmatch`. CI module [42314679553](https://github.com/adam-adrian/lyrics/actions/runs/42314679553) berhasil menjalankan `gradle --console=plain build test --warning-mode summary`, termasuk `:musixmatch:test` dan test converter/parser TTML setelah import package diperbaiki. Suite source berisi 105 deklarasi `@Test`; log CI tidak menerbitkan laporan jumlah test saat berhasil.
+
+Search meminta pool 20, mempertahankan gate durasi delapan detik, lalu dedup, stable ranking berdasarkan demerit versi dan rating, dan cap empat kandidat dengan concurrency dua. Seleksi kosong, termasuk pool yang seluruhnya terfilter, mencoba matcher by-title. Playback hanya fallback setelah `NoMatch`/`Mismatch`, mencoba maksimal dua kandidat berurutan.
+
+RichSync terpisah tersedia pada search dan playback melalui resolver bersama; prioritas tetap RichSync, subtitle, lalu plain. Satu budget renewal token mencakup seluruh operasi dan transisi endpoint. Cancellation, 429, dan kegagalan renewal tetap terminal. Log funnel hanya memuat jumlah returned, eligible, dan candidates.
+
+Verifikasi ini membuktikan regression suite offline dengan MockEngine dan eksekusi converter/parser sebenarnya, bukan smoke API live atau render perangkat. Smoke live dan APK pada bagian 5 mendahului hybrid; gitlink dan APK app belum diperbarui untuk commit hybrid. Tidak ada subagent atau Gradle lokal yang digunakan dalam implementasi hybrid.
+
+### Bukti regression-first
+
+| Tahap | CI sebelum implementasi | Perbaikan dan CI sesudahnya |
+|---|---|---|
+| Ekstraksi mekanis | `210ba02`: import `SearchBody` hilang | `b51cb2f`, run `42310694745` lulus; baseline 68 test |
+| Fallback dua arah | `18b9dfe`, run `42311004934`: 84 test, 14 gagal | `9616ec8`, run `42311373116` lulus |
+| Separate RichSync search | `9c050b6`, run `42312233356`: 93 test, 6 gagal | `da6ed94`, run `42312480753` lulus |
+| Pool 20 | `d87ec52`, run `42313340861`: 94 test, 1 gagal | `bca963f`; test non-ranking lulus pada run `42313578177`, seluruh suite kemudian lulus pada `42313932757` |
+| Stable ranking | `de64e59`, run `42313578177`: 104 test, 6 gagal, seluruhnya ranking | `4635fa5`, run `42313932757` lulus |
+| Round-trip dan log funnel | `a255f51`, run `42314361257`: compile test gagal karena package parser salah | Import diperbaiki pada `143184b`; run `42314679553` lulus |
+
+`TTMLParser.kt` masih berada di direktori lama `moe/koiverse/rukamori`, tetapi deklarasi package sebenarnya `moe.rukamori.archivetune.betterlyrics`. Test mengikuti deklarasi tersebut; dependency `:betterlyrics` hanya `testImplementation`.
+
+### Smoke JVM hybrid
+
+Runner sementara pada `6eca335091c5d6a61178dc5da94df7bd24a3cbf6` berhasil di CI [42317352849](https://github.com/adam-adrian/lyrics/actions/runs/42317352849). Entry point JVM terpisah menjalankan provider produksi dengan transport MockEngine, kemudian memparse TTML melalui parser produksi.
+
+| Jalur | Request | Renewal | Hasil |
+|---|---:|---:|---|
+| Search kosong → title matcher → separate RichSync → parser | 3 | 0 | PASS; satu baris TTML, teks dan timing terjaga |
+| Playback 401 → renewal → matcher 404 → ranked search → kandidat pertama gagal → kandidat kedua → separate RichSync → parser | 7 | 1 | PASS; satu baris TTML, teks dan timing terjaga |
+
+Smoke juga memeriksa urutan endpoint, ranking sebelum cap dua kandidat playback, dan log funnel search kosong. Output hanya memuat hitungan dan status; tidak mencetak token, URL, atau isi lirik. Runner dan wiring Gradle sementara dihapus setelah bukti diperoleh. Ini smoke offline, bukan pengukuran API live atau perangkat.
+
+### Verifikasi final setelah cleanup
+
+Commit `f86fbc77d9cfd7cfc825b1dea556551e080752f0` menghapus runner sementara tanpa mengubah kode hybrid. CI [42317619028](https://github.com/adam-adrian/lyrics/actions/runs/42317619028) lulus setelah cleanup. Regression suite permanen dan test round-trip tetap dipertahankan.
+
+Pemeriksaan source: tidak ada import Android atau perubahan version catalog; dependency tambahan hanya untuk test; seluruh file Kotlin baru memiliki header GPL ArchiveTune. `Musixmatch.kt` berisi 461 baris dan helper produksi lainnya di bawah 500 baris. Integrasi gitlink app, APK hybrid, API live hybrid, dan render perangkat tidak dikerjakan dalam paket ini.
