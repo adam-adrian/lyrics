@@ -58,8 +58,13 @@ class MusixmatchCandidateRankingTest {
     }
 
     @Test
+    fun requestedVersionOutranksHigherRatedCanonical() {
+        assertEquals(listOf(1L, 2L), selected("Dynamite (Slow Jam Remix)", track(2, "Dynamite", 90), track(1, "Dynamite (Slow Jam Remix)", 44)))
+    }
+
+    @Test
     fun requestedRemixDoesNotExcuseUnrequestedLiveMarker() {
-        assertEquals(listOf(2L, 1L), selected("Song (Remix)", track(1, "Song (Live Remix)", 100), track(2, rating = 10)))
+        assertEquals(listOf(2L, 1L), selected("Song (Remix)", track(1, "Song (Live Remix)", 100), track(2, "Song (Remix)", 10)))
     }
 
     @Test

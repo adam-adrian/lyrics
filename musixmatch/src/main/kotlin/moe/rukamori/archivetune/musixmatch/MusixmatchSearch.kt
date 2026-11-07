@@ -109,7 +109,7 @@ private fun versionDemerit(track: Track, inputMarkers: Int): Int {
     for (qualifier in qualifierPattern.findAll(track.trackName)) {
         markers = markers or versionMarkers(qualifier.value)
     }
-    return if (markers and inputMarkers.inv() != 0) 1 else 0
+    return if ((markers xor inputMarkers) != 0) 1 else 0
 }
 
 internal suspend fun Musixmatch.resolveSearchFallback(
@@ -118,6 +118,7 @@ internal suspend fun Musixmatch.resolveSearchFallback(
     artist: String,
     durationSeconds: Int,
 ): String {
+    logger?.invoke("Musixmatch playback fallback: ranked search")
     val body = tokenState.execute { token -> executeTrackSearch(title, artist, token) }
     var lastFailure: MusixmatchError? = null
     for (candidate in selectSearchCandidates(body, title, durationSeconds, SEARCH_FALLBACK_MAX_ATTEMPTS)) {
@@ -147,6 +148,7 @@ internal suspend fun Musixmatch.resolveTitleFallbackForSearch(
     album: String,
     durationSeconds: Int,
 ): String? = try {
+    logger?.invoke("Musixmatch search fallback: title matcher")
     val calls = tokenState.execute { token -> executeMacro(title, artist, album, durationSeconds, token) }.macroCalls
     val track = matchedTrack(calls)
     validateMatch(track, title, artist, durationSeconds)

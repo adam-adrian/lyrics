@@ -71,6 +71,8 @@ Isi: filter (`trackId > 0`, `!isInstrumental`, gate durasi ±8 bila diketahui) �
 
 **Kenapa 2, bukan 1 atau 4:** kandidat peringkat pertama bisa tidak punya lirik dalam format apa pun; percobaan kedua murah. Dua percobaan berurutan menjaga anggaran `PROVIDER_TIMEOUT_MS = 8000` yang sudah dipakai playback. Jangan naikkan concurrency di jalur ini.
 
+**Risiko latency:** separate RichSync tetap berjalan di dalam permit semaphore. Dua percobaan bukan jaminan selesai dalam timeout 8 detik. Jangan ubah concurrency, gate durasi, atau batas percobaan sekarang. Ukur hasil lewat log funnel terlebih dahulu; bila `candidates=4` tetapi hanya 1–2 hasil tiba, langkah pertama yang disepakati adalah menurunkan `SEARCH_FALLBACK_MAX_ATTEMPTS` ke 1 sebelum mengubah concurrency atau gate durasi.
+
 ### 2.2 Prosedur per kandidat fallback playback
 
 1. `executeMacroByTrackId(trackId, token)`
@@ -125,7 +127,7 @@ demerit ASC → trackRating DESC → (stable sort mempertahankan urutan respons)
 
 ### 4.3 `demerit` — penanda versi, hanya dari segmen kualifikasi
 
-`demerit = 1` bila kandidat punya penanda versi **dan judul input tidak punya**; selain itu `0`.
+`demerit = 1` bila himpunan penanda versi kandidat berbeda dari input (`markers xor inputMarkers != 0`); selain itu `0`. Kandidat dihukum bila menambah penanda yang tidak diminta atau kehilangan penanda yang diminta.
 
 Penanda dicari **hanya** di:
 - segmen dalam `(...)` dan `[...]` pada `track_name`
@@ -136,7 +138,7 @@ Daftar penanda: `remix`, `live`, `cover`, `instrumental`, `acoustic`, `arrangeme
 
 **Kenapa hanya segmen kualifikasi:** menghindari salah positif pada judul sah seperti `Live Forever` atau `Alive`. `Dynamite (Bedroom Remix)` → kualifikasi `Bedroom Remix` → demerit. `Live Forever` → tanpa kualifikasi → tidak ada demerit.
 
-**Kenapa dibandingkan dengan judul input:** bila user memang memutar `Dynamite (Slow Jam Remix)`, input juga punya penanda itu, sehingga kandidat remix tidak dihukum.
+**Kenapa dibandingkan dengan judul input:** bila user memutar `Dynamite (Slow Jam Remix)`, kandidat remix mendapat demerit 0, sedangkan kandidat kanonik mendapat 1 walaupun rating-nya lebih tinggi. Ini membandingkan kategori versi, bukan nama remix spesifik.
 
 **Bukti pendukung** (§12.3): Dynamite kanonik rating 90; remix 42–53; cover 29; instrumental 38. `Blinding Lights` dari album `Official Covers, Vol.1` tertangkap lewat penanda cover di album.
 
