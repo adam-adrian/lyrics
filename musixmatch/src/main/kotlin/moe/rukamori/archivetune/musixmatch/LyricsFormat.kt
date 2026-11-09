@@ -29,6 +29,7 @@ internal class LyricsFormat(private val jsonFormat: Json) {
     fun tryLrc(subtitleBody: String?): String? {
         if (subtitleBody.isNullOrBlank()) return null
         return formatSubtitlesToLrc(subtitleBody)?.takeIf { it.isNotBlank() }
+            ?: subtitleBody.takeIf { it.trimStart().startsWith("[") }?.trim()?.takeIf { it.isNotBlank() }
     }
 
     fun tryPlain(lyricsBody: String?): String? {

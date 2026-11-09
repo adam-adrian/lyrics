@@ -37,6 +37,7 @@ import moe.rukamori.archivetune.musixmatch.models.MatcherBody
 import moe.rukamori.archivetune.musixmatch.models.ResolvedLyrics
 import moe.rukamori.archivetune.musixmatch.models.RichSyncBody
 import moe.rukamori.archivetune.musixmatch.models.SearchBody
+import moe.rukamori.archivetune.musixmatch.models.SubtitleBody
 import moe.rukamori.archivetune.musixmatch.models.SubtitlesBody
 import moe.rukamori.archivetune.musixmatch.models.TokenBody
 import moe.rukamori.archivetune.musixmatch.models.Track
@@ -124,51 +125,25 @@ object Musixmatch {
 
     private suspend fun fetchToken(): String {
         logger?.invoke("Musixmatch token request started")
-        val response =
-            client.get("${BASE_URL}token.get") {
-                parameter("app_id", APP_ID)
-            }
-
-        if (response.status == HttpStatusCode.Unauthorized) {
-            throw MusixmatchError.RateLimited("HTTP 401 on token.get")
+        val response = client.get("${BASE_URL}token.get") { parameter("app_id", APP_ID) }
+        if (response.status == HttpStatusCode.Unauthorized || response.status == HttpStatusCode.TooManyRequests) {
+            throw MusixmatchError.RateLimited("HTTP ${response.status.value} on token.get")
         }
-        if (response.status == HttpStatusCode.TooManyRequests) {
-            throw MusixmatchError.RateLimited("HTTP 429 on token.get")
-        }
-        if (response.status.value >= 500) {
-            throw MusixmatchError.ServerError(response.status.value)
-        }
-        if (!response.status.isSuccess()) {
-            throw MusixmatchError.MalformedResponse("HTTP ${response.status.value} on token.get")
-        }
+        if (response.status.value >= 500) throw MusixmatchError.ServerError(response.status.value)
+        if (!response.status.isSuccess()) throw MusixmatchError.MalformedResponse("HTTP ${response.status.value} on token.get")
 
         val bodyText = response.bodyAsText()
-        val apiResponse =
-            runCatching {
-                jsonFormat.decodeFromString<ApiResponse<TokenBody>>(bodyText)
-            }.getOrElse {
-                throw MusixmatchError.MalformedResponse("Failed to parse token response")
-            }
-
+        val apiResponse = runCatching { jsonFormat.decodeFromString<ApiResponse<TokenBody>>(bodyText) }
+            .getOrElse { throw MusixmatchError.MalformedResponse("Failed to parse token response") }
         val statusCode = apiResponse.message?.header?.statusCode ?: 0
-        if (statusCode == 401) {
-            throw MusixmatchError.RateLimited("Status code 401 on token.get")
-        }
-        if (statusCode == 429) {
-            throw MusixmatchError.RateLimited("Status code 429 on token.get")
-        }
-        if (statusCode >= 500) {
-            throw MusixmatchError.ServerError(statusCode)
-        }
-        if (statusCode != 200) {
-            throw MusixmatchError.MalformedResponse("Status code $statusCode on token.get")
-        }
+        if (statusCode == 401 || statusCode == 429) throw MusixmatchError.RateLimited("Status code $statusCode on token.get")
+        if (statusCode >= 500) throw MusixmatchError.ServerError(statusCode)
+        if (statusCode != 200) throw MusixmatchError.MalformedResponse("Status code $statusCode on token.get")
 
         val token = apiResponse.message?.body?.userToken
         if (token.isNullOrBlank() || token.all { it == '0' } || token.startsWith("UpgradeOnly")) {
             throw MusixmatchError.TokenInvalid("Token missing or blacklisted")
         }
-
         logger?.invoke("Musixmatch token acquired successfully")
         return token
     }
@@ -214,23 +189,14 @@ object Musixmatch {
         response: io.ktor.client.statement.HttpResponse,
         operation: String,
     ): T {
-        if (response.status == HttpStatusCode.Unauthorized) {
-            throw MusixmatchError.TokenInvalid("HTTP 401 on $operation")
-        }
-        if (response.status == HttpStatusCode.TooManyRequests) {
-            throw MusixmatchError.RateLimited("HTTP 429 on $operation")
-        }
-        if (response.status.value >= 500) {
-            throw MusixmatchError.ServerError(response.status.value)
-        }
-        if (!response.status.isSuccess()) {
-            throw MusixmatchError.MalformedResponse("HTTP ${response.status.value} on $operation")
-        }
+        if (response.status == HttpStatusCode.Unauthorized) throw MusixmatchError.TokenInvalid("HTTP 401 on $operation")
+        if (response.status == HttpStatusCode.TooManyRequests) throw MusixmatchError.RateLimited("HTTP 429 on $operation")
+        if (response.status.value >= 500) throw MusixmatchError.ServerError(response.status.value)
+        if (!response.status.isSuccess()) throw MusixmatchError.MalformedResponse("HTTP ${response.status.value} on $operation")
 
         val bodyText = response.bodyAsText()
-        val apiResponse =
-            runCatching { jsonFormat.decodeFromString<ApiResponse<T>>(bodyText) }
-                .getOrElse { throw MusixmatchError.MalformedResponse("Failed to parse $operation response") }
+        val apiResponse = runCatching { jsonFormat.decodeFromString<ApiResponse<T>>(bodyText) }
+            .getOrElse { throw MusixmatchError.MalformedResponse("Failed to parse $operation response") }
         val statusCode = apiResponse.message?.header?.statusCode ?: 0
         if (statusCode == 401) throw MusixmatchError.TokenInvalid("Status code 401 on $operation")
         if (statusCode == 429) throw MusixmatchError.RateLimited("Status code 429 on $operation")
@@ -275,11 +241,23 @@ object Musixmatch {
         return body
     }
 
-    private suspend fun fetchRichSyncSeparately(
-        commonTrackId: Long,
-        trackLength: Int,
-        token: String,
-    ): String? {
+    private suspend inline fun <reified T> decodeStandaloneResponse(
+        response: io.ktor.client.statement.HttpResponse,
+        operation: String,
+    ): T? {
+        if (response.status == HttpStatusCode.Unauthorized) throw MusixmatchError.TokenInvalid("HTTP 401 on $operation")
+        if (response.status == HttpStatusCode.TooManyRequests) throw MusixmatchError.RateLimited("HTTP 429 on $operation")
+        if (!response.status.isSuccess()) return null
+        val bodyText = response.bodyAsText()
+        val apiResponse = runCatching { jsonFormat.decodeFromString<ApiResponse<T>>(bodyText) }.getOrNull() ?: return null
+        val status = apiResponse.message?.header?.statusCode
+        if (status == 401) throw MusixmatchError.TokenInvalid("Status code 401 on $operation")
+        if (status == 429) throw MusixmatchError.RateLimited("Status code 429 on $operation")
+        if (status != 200) return null
+        return apiResponse.message?.body
+    }
+
+    private suspend fun fetchRichSyncSeparately(commonTrackId: Long, trackLength: Int, token: String): String? {
         if (commonTrackId <= 0) return null
         return try {
             logger?.invoke("Musixmatch separate richsync request started")
@@ -294,17 +272,32 @@ object Musixmatch {
                     parameter("q_duration", trackLength)
                     parameter("usertoken", token)
                 }
+            decodeStandaloneResponse<RichSyncBody>(response, "richsync")?.richsync?.richsyncBody
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: MusixmatchError.TokenInvalid) {
+            throw e
+        } catch (e: MusixmatchError.RateLimited) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+    }
 
-            if (response.status == HttpStatusCode.Unauthorized) throw MusixmatchError.TokenInvalid("HTTP 401 on richsync")
-            if (response.status == HttpStatusCode.TooManyRequests) throw MusixmatchError.RateLimited("HTTP 429 on richsync")
-            if (!response.status.isSuccess()) return null
-            val bodyText = response.bodyAsText()
-            val apiResponse = jsonFormat.decodeFromString<ApiResponse<RichSyncBody>>(bodyText)
-            val status = apiResponse.message?.header?.statusCode
-            if (status == 401) throw MusixmatchError.TokenInvalid("Status code 401 on richsync")
-            if (status == 429) throw MusixmatchError.RateLimited("Status code 429 on richsync")
-            if (status != 200) return null
-            apiResponse.message?.body?.richsync?.richsyncBody
+    private suspend fun fetchSubtitleSeparately(trackId: Long, trackLength: Int, token: String): String? {
+        if (trackId <= 0) return null
+        return try {
+            logger?.invoke("Musixmatch separate subtitle request started")
+            val response =
+                client.get("${BASE_URL}track.subtitle.get") {
+                    parameter("format", "json")
+                    parameter("subtitle_format", "mxm")
+                    parameter("app_id", APP_ID)
+                    parameter("track_id", trackId)
+                    if (trackLength > 0) parameter("f_subtitle_length", trackLength)
+                    parameter("usertoken", token)
+                }
+            decodeStandaloneResponse<SubtitleBody>(response, "subtitle")?.subtitle?.subtitleBody
         } catch (e: CancellationException) {
             throw e
         } catch (e: MusixmatchError.TokenInvalid) {
@@ -361,16 +354,25 @@ object Musixmatch {
         val inlineRichsync = calls?.trackRichsyncGet
             ?.takeIf { it.message.header.statusCode == 200 }
             .bodyAs<RichSyncBody>(jsonFormat)?.richsync?.richsyncBody
-        val richsync = inlineRichsync ?: if (track.isRichsyncAvailable) {
+        val ttml = lyricsFormat.tryTtml(inlineRichsync)
+        val richsync = if (ttml != null) {
+            return ResolvedLyrics(ttml, 2)
+        } else if (track.isRichsyncAvailable) {
             tokenState.execute { token -> fetchRichSyncSeparately(track.commonTrackId, track.trackLength, token) }
         } else null
         lyricsFormat.tryTtml(richsync)?.let { return ResolvedLyrics(it, 2) }
 
-        val subtitleBody = calls?.trackSubtitlesGet
+        val inlineSubtitle = calls?.trackSubtitlesGet
             ?.takeIf { it.message.header.statusCode == 200 }
             .bodyAs<SubtitlesBody>(jsonFormat)
             ?.subtitleList?.firstOrNull()?.subtitle?.subtitleBody
-        lyricsFormat.tryLrc(subtitleBody)?.let { return ResolvedLyrics(it, 1) }
+        val lrc = lyricsFormat.tryLrc(inlineSubtitle)
+        val subtitle = if (lrc != null) {
+            return ResolvedLyrics(lrc, 1)
+        } else if (track.isSubtitlesAvailable) {
+            tokenState.execute { token -> fetchSubtitleSeparately(track.trackId, track.trackLength, token) }
+        } else null
+        lyricsFormat.tryLrc(subtitle)?.let { return ResolvedLyrics(it, 1) }
 
         val plain = calls?.trackLyricsGet
             ?.takeIf { it.message.header.statusCode == 200 }

@@ -80,6 +80,11 @@ data class SubtitleItem(
 )
 
 @Serializable
+data class SubtitleBody(
+    val subtitle: SubtitleData? = null,
+)
+
+@Serializable
 data class SubtitleData(
     @SerialName("subtitle_body") val subtitleBody: String? = null,
 )
