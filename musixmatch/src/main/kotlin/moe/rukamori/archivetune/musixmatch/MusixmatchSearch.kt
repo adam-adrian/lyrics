@@ -9,6 +9,7 @@ package moe.rukamori.archivetune.musixmatch
 import kotlinx.coroutines.CancellationException
 import moe.rukamori.archivetune.musixmatch.models.MacroTarget
 import moe.rukamori.archivetune.musixmatch.models.SearchBody
+import moe.rukamori.archivetune.musixmatch.models.SearchCandidate
 import moe.rukamori.archivetune.musixmatch.models.Track
 import kotlin.math.abs
 
@@ -20,16 +21,15 @@ internal fun selectSearchCandidates(
     inputTitle: String,
     durationSeconds: Int,
     limit: Int,
-): List<Track> = body.trackList
+): List<SearchCandidate> = body.trackList
     .mapNotNull { it.track }
     .filter { track -> isSearchCandidate(track, durationSeconds) }
     .distinctBy { it.trackId }
     .let { tracks ->
         val inputMarkers = versionMarkers(inputTitle)
-        tracks.map { track -> RankedTrack(track, versionDemerit(track, inputMarkers)) }
-            .sortedWith(compareBy<RankedTrack> { it.demerit }.thenByDescending { it.track.trackRating })
+        tracks.map { track -> SearchCandidate(track, versionDemerit(track, inputMarkers)) }
+            .sortedWith(compareBy<SearchCandidate> { it.demerit }.thenByDescending { it.track.trackRating })
             .take(limit)
-            .map { it.track }
     }
 
 private fun isSearchCandidate(track: Track, durationSeconds: Int): Boolean =
@@ -83,7 +83,6 @@ internal fun validateMatch(
         throw MusixmatchError.Mismatch("Track and artist both mismatched")
     }
 }
-private data class RankedTrack(val track: Track, val demerit: Int)
 
 private val qualifierPattern = Regex("""\([^)]*\)|\[[^]]*\]| [-–] (.+)$""")
 private val markerPattern = Regex("""(?i)(?<![\p{L}\p{N}])(?:remix|live|covers?|instrumental|acoustic|arrangement|tribute|karaoke)(?![\p{L}\p{N}])""")
@@ -125,7 +124,7 @@ internal suspend fun Musixmatch.resolveSearchFallback(
     for (candidate in selectSearchCandidates(body, title, durationSeconds, SEARCH_FALLBACK_MAX_ATTEMPTS)) {
         try {
             return resolveRequest(
-                MacroTarget.ById(candidate.trackId, title, artist, durationSeconds),
+                MacroTarget.ById(candidate.track.trackId, title, artist, durationSeconds),
                 tokenState,
             ).lyrics
         } catch (e: CancellationException) {

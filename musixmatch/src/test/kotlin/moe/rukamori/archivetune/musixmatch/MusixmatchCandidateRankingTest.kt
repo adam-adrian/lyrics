@@ -16,7 +16,7 @@ import org.junit.Test
 
 class MusixmatchCandidateRankingTest {
     private fun selected(title: String, vararg tracks: Track, limit: Int = 4): List<Long> =
-        selectSearchCandidates(SearchBody(tracks.map { SearchTrackItem(it) }), title, 100, limit).map { it.trackId }
+        selectSearchCandidates(SearchBody(tracks.map { SearchTrackItem(it) }), title, 100, limit).map { it.track.trackId }
 
     private fun track(id: Long, title: String = "Song", rating: Int = 0, album: String = "", length: Int = 100) =
         Json { ignoreUnknownKeys = true }.decodeFromString<Track>(
@@ -84,5 +84,21 @@ class MusixmatchCandidateRankingTest {
     @Test
     fun gateAndDedupStillPrecedeRatingAndLimit() {
         assertEquals(listOf(2L, 3L), selected("Song", track(1, rating = 100, length = 109), track(2, rating = 10), track(2, rating = 100), track(3, rating = 5), limit = 2))
+    }
+
+    @Test
+    fun candidatesRetainDemerit() {
+        val body = SearchBody(
+            listOf(
+                SearchTrackItem(track(1, "Song (Live)", 100)),
+                SearchTrackItem(track(2, rating = 80)),
+            ),
+        )
+        val candidates = selectSearchCandidates(body, "Song", 100, limit = 2)
+        assertEquals(2, candidates.size)
+        assertEquals(2L, candidates[0].track.trackId)
+        assertEquals(0, candidates[0].demerit)
+        assertEquals(1L, candidates[1].track.trackId)
+        assertEquals(1, candidates[1].demerit)
     }
 }

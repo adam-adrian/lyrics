@@ -428,7 +428,7 @@ object Musixmatch {
                         semaphore.withPermit {
                             currentCoroutineContext().ensureActive()
                             resolveRequest(
-                                MacroTarget.ById(candidate.trackId, durationSeconds = durationSeconds),
+                                MacroTarget.ById(candidate.track.trackId, durationSeconds = durationSeconds),
                                 tokenState,
                             ).lyrics
                         }

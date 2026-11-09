@@ -18,3 +18,8 @@ data class SearchBody(
 data class SearchTrackItem(
     val track: Track? = null,
 )
+
+data class SearchCandidate(
+    val track: Track,
+    val demerit: Int,
+)
