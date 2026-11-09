@@ -301,7 +301,7 @@ object Musixmatch {
         }
         if (track.isInstrumental) throw MusixmatchError.Instrumental()
 
-        val inlineRichsync = if (calls?.trackRichsyncGet?.message?.header?.statusCode == 200) {
+        val richsync = if (calls?.trackRichsyncGet?.message?.header?.statusCode == 200) {
             calls.trackRichsyncGet.bodyAs<RichSyncBody>(jsonFormat)?.richsync?.richsyncBody
         } else if (track.isRichsyncAvailable) {
             tokenState.execute { token -> fetchRichSyncSeparately(track.commonTrackId, track.trackLength, token, contextLabel) }
