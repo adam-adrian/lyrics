@@ -30,7 +30,6 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.Json
 import moe.rukamori.archivetune.musixmatch.models.ApiResponse
 import moe.rukamori.archivetune.musixmatch.models.LyricsBody
-import moe.rukamori.archivetune.musixmatch.models.CandidateOutcome
 import moe.rukamori.archivetune.musixmatch.models.MacroCalls
 import moe.rukamori.archivetune.musixmatch.models.MacroResponseBody
 import moe.rukamori.archivetune.musixmatch.models.MacroTarget
@@ -422,50 +421,34 @@ object Musixmatch {
 
         val semaphore = Semaphore(SEARCH_CONCURRENCY)
         val callbackMutex = Mutex()
-        val outcomes = mutableListOf<CandidateOutcome>()
-        val outcomesMutex = Mutex()
-        var terminalOccurred = false
-
         coroutineScope {
             val searchScope = this
-            candidates.forEachIndexed { index, candidate ->
+            candidates.forEach { candidate ->
                 launch {
-                    val rank = index + 1
-                    val outcome = try {
+                    val lyrics = try {
                         semaphore.withPermit {
                             currentCoroutineContext().ensureActive()
-                            val shouldAbort = outcomesMutex.withLock { terminalOccurred }
-                            if (shouldAbort) return@launch
-                            val resolved = resolveRequest(
+                            resolveRequest(
                                 MacroTarget.ById(candidate.track.trackId, durationSeconds = durationSeconds),
                                 tokenState,
-                            )
-                            CandidateOutcome.Success(candidate, rank, resolved)
+                            ).lyrics
                         }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: MusixmatchError.TokenInvalid) {
-                        CandidateOutcome.TerminalFailure(candidate, rank, e)
+                        throw e
                     } catch (e: MusixmatchError.RateLimited) {
-                        CandidateOutcome.TerminalFailure(candidate, rank, e)
+                        throw e
                     } catch (e: Exception) {
                         logger?.invoke("Musixmatch candidate skipped")
-                        CandidateOutcome.LocalFailure(candidate, rank, e)
+                        null
                     }
-
-                    outcomesMutex.withLock {
-                        outcomes.add(outcome)
-                        if (outcome is CandidateOutcome.TerminalFailure) {
-                            terminalOccurred = true
-                        }
-                    }
-
-                    if (outcome is CandidateOutcome.Success) {
+                    if (lyrics != null) {
                         currentCoroutineContext().ensureActive()
                         callbackMutex.withLock {
                             currentCoroutineContext().ensureActive()
                             try {
-                                callback(outcome.lyrics.lyrics)
+                                callback(lyrics)
                             } catch (e: CancellationException) {
                                 searchScope.cancel(e)
                                 throw e
@@ -474,11 +457,6 @@ object Musixmatch {
                     }
                 }
             }
-        }
-
-        val terminals = outcomes.filterIsInstance<CandidateOutcome.TerminalFailure>()
-        if (terminals.isNotEmpty()) {
-            throw terminals.minByOrNull { it.rank }!!.error
         }
     }
 }
