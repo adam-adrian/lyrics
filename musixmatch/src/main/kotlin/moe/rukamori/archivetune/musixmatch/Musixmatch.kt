@@ -18,14 +18,12 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -441,20 +439,12 @@ object Musixmatch {
                                 if (startedCount.get() < candidates.size && queueStopped.compareAndSet(false, true)) {
                                     logger?.invoke("Musixmatch fan-out: queue stopped — terminal (${errorLabel(e)}) at ranked $rank")
                                 }
-                                searchScope.cancel()
                             }
                             null
                         }
                         if (lyrics != null) {
-                            withContext(NonCancellable) {
-                                callbackMutex.withLock {
-                                    try {
-                                        callback(lyrics)
-                                    } catch (e: CancellationException) {
-                                        searchScope.cancel(e)
-                                        throw e
-                                    }
-                                }
+                            callbackMutex.withLock {
+                                callback(lyrics)
                             }
                         }
                     }

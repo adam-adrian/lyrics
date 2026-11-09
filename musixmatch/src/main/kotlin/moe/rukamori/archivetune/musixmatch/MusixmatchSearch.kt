@@ -11,6 +11,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import moe.rukamori.archivetune.musixmatch.models.SearchBody
 import moe.rukamori.archivetune.musixmatch.models.Track
@@ -158,11 +159,8 @@ internal suspend fun Musixmatch.resolveSearchFallback(
                     CandidateOutcome.TerminalFailure(candidate, rank, e)
                 } catch (e: MusixmatchError.RateLimited) {
                     logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
-                    jobs.forEachIndexed { idx, j -> if (idx + 1 != rank) j.cancel() }
-                    val terminal = CandidateOutcome.TerminalFailure(candidate, rank, e)
-                    channel.send(terminal)
-                    channel.close()
-                    return@launch
+                    jobs.forEachIndexed { idx, j -> if (idx + 1 > rank) j.cancel() }
+                    CandidateOutcome.TerminalFailure(candidate, rank, e)
                 } catch (e: Exception) {
                     logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
                     CandidateOutcome.LocalFailure(candidate, rank, e)
@@ -170,9 +168,12 @@ internal suspend fun Musixmatch.resolveSearchFallback(
                 channel.send(outcome)
             }
         }
+        launch {
+            jobs.joinAll()
+            channel.close()
+        }
 
-        for (i in candidates.indices) {
-            val outcome = channel.receiveCatching().getOrNull() ?: break
+        for (outcome in channel) {
             outcomes.add(outcome)
 
             val successes = outcomes.filterIsInstance<CandidateOutcome.Success>()
@@ -190,8 +191,9 @@ internal suspend fun Musixmatch.resolveSearchFallback(
                 if (isUnbeatable && remainingCandidates.isNotEmpty()) {
                     logger?.invoke("Musixmatch fallback: early-stop")
                     jobs.forEachIndexed { idx, job ->
-                        if (idx + 1 != bestSuccess.rank) {
-                            logger?.invoke("Musixmatch fallback ranked ${idx + 1}: cancelled (early-stop)")
+                        val r = idx + 1
+                        if (r != bestSuccess.rank && outcomes.none { it.rank == r } && job.isActive) {
+                            logger?.invoke("Musixmatch fallback ranked $r: cancelled (early-stop)")
                             job.cancel()
                         }
                     }
