@@ -13,6 +13,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import moe.rukamori.archivetune.musixmatch.models.CandidateOutcome
 import moe.rukamori.archivetune.musixmatch.models.MacroTarget
+import moe.rukamori.archivetune.musixmatch.models.ResolvedLyrics
 import moe.rukamori.archivetune.musixmatch.models.SearchBody
 import moe.rukamori.archivetune.musixmatch.models.SearchCandidate
 import moe.rukamori.archivetune.musixmatch.models.Track
