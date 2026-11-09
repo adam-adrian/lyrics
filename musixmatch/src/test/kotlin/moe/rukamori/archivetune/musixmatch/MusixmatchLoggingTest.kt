@@ -308,8 +308,9 @@ class MusixmatchLoggingTest {
         assertTrue(result.isSuccess)
 
         assertAllLogsMatchAllowlist()
-        val rank1Outcomes = logs.count { it.startsWith("Musixmatch fallback ranked 1: ") }
-        val rank2Outcomes = logs.count { it.startsWith("Musixmatch fallback ranked 2: ") }
+        val outcomePattern = Regex("""^Musixmatch fallback ranked \d+: (success|instrumental|failed|cancelled)""")
+        val rank1Outcomes = logs.count { it.startsWith("Musixmatch fallback ranked 1: ") && outcomePattern.containsMatchIn(it) }
+        val rank2Outcomes = logs.count { it.startsWith("Musixmatch fallback ranked 2: ") && outcomePattern.containsMatchIn(it) }
         assertEquals(1, rank1Outcomes)
         assertEquals(1, rank2Outcomes)
         assertTrue(logs.contains("Musixmatch fallback ranked 1: success demerit=0 quality=2 rating=80"))

@@ -133,11 +133,14 @@ internal suspend fun Musixmatch.resolveSearchFallback(
     if (candidates.isEmpty()) throw MusixmatchError.NoMatch("Search fallback returned no usable lyrics")
 
     val outcomes = mutableListOf<CandidateOutcome>()
+    val terminalError = java.util.concurrent.atomic.AtomicReference<MusixmatchError?>(null)
     coroutineScope {
         val channel = Channel<CandidateOutcome>(candidates.size)
-        val jobs = candidates.mapIndexed { index, candidate ->
+        lateinit var jobs: List<kotlinx.coroutines.Job>
+        jobs = candidates.mapIndexed { index, candidate ->
             val rank = index + 1
             launch {
+                if (terminalError.get() != null) return@launch
                 val outcome = try {
                     val resolved = resolveRequest(
                         MacroTarget.ById(candidate.track.trackId, title, artist, durationSeconds),
@@ -156,6 +159,8 @@ internal suspend fun Musixmatch.resolveSearchFallback(
                     CandidateOutcome.TerminalFailure(candidate, rank, e)
                 } catch (e: MusixmatchError.RateLimited) {
                     logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
+                    terminalError.set(e)
+                    jobs.forEachIndexed { idx, j -> if (idx != index) j.cancel() }
                     CandidateOutcome.TerminalFailure(candidate, rank, e)
                 } catch (e: Exception) {
                     logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
@@ -166,7 +171,7 @@ internal suspend fun Musixmatch.resolveSearchFallback(
         }
 
         for (i in candidates.indices) {
-            val outcome = channel.receive()
+            val outcome = channel.receiveCatching().getOrNull() ?: break
             outcomes.add(outcome)
 
             val successes = outcomes.filterIsInstance<CandidateOutcome.Success>()
@@ -192,6 +197,9 @@ internal suspend fun Musixmatch.resolveSearchFallback(
                     }
                     break
                 }
+            }
+            if (terminalError.get() != null && successes.isEmpty()) {
+                break
             }
         }
     }
