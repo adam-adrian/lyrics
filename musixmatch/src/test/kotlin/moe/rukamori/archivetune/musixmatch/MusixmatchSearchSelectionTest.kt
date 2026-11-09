@@ -349,6 +349,7 @@ class MusixmatchSearchSelectionTest {
             }
         }
         assertFalse(result.requests.any { it.encodedPath.endsWith("track.richsync.get") })
+        assertFalse(result.requests.any { it.encodedPath.endsWith("track.subtitle.get") })
     }
 
     private fun quote(value: String): String = Json.encodeToString(value)
@@ -360,9 +361,10 @@ class MusixmatchSearchSelectionTest {
         title: String = "Song",
         artist: String = "Artist",
         hasRichsync: Int = 0,
+        hasSubtitles: Int = 0,
     ): String {
         val duration = length?.let { ",\"track_length\":$it" } ?: ""
-        return """{"track_id":$id,"commontrack_id":${id + 1000},"track_name":${quote(title)},"artist_name":${quote(artist)},"instrumental":$instrumental,"has_richsync":$hasRichsync,"has_subtitles":1,"has_lyrics":1$duration}"""
+        return """{"track_id":$id,"commontrack_id":${id + 1000},"track_name":${quote(title)},"artist_name":${quote(artist)},"instrumental":$instrumental,"has_richsync":$hasRichsync,"has_subtitles":$hasSubtitles,"has_lyrics":1$duration}"""
     }
 
     private fun envelope(body: String): String =
