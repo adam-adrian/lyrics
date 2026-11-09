@@ -70,19 +70,17 @@ internal fun validateMatch(
     val normTrackArtist = normalizeString(track.artistName)
     val normInputArtist = normalizeString(inputArtist)
 
-    if (normInputTitle.isNotEmpty() || normInputArtist.isNotEmpty()) {
-        val titleOk =
-            normTrackTitle.isNotEmpty() &&
-                normInputTitle.isNotEmpty() &&
-                (normTrackTitle.contains(normInputTitle) || normInputTitle.contains(normTrackTitle))
-        val artistOk =
-            normTrackArtist.isNotEmpty() &&
-                normInputArtist.isNotEmpty() &&
-                (normTrackArtist.contains(normInputArtist) || normInputArtist.contains(normTrackArtist))
+    val titleOk =
+        normTrackTitle.isNotEmpty() &&
+            normInputTitle.isNotEmpty() &&
+            (normTrackTitle.contains(normInputTitle) || normInputTitle.contains(normTrackTitle))
+    val artistOk =
+        normTrackArtist.isNotEmpty() &&
+            normInputArtist.isNotEmpty() &&
+            (normTrackArtist.contains(normInputArtist) || normInputArtist.contains(normTrackArtist))
 
-        if (!titleOk && !artistOk) {
-            throw MusixmatchError.Mismatch("Track and artist both mismatched")
-        }
+    if (!titleOk && !artistOk) {
+        throw MusixmatchError.Mismatch("Track and artist both mismatched")
     }
 }
 private data class RankedTrack(val track: Track, val demerit: Int)
