@@ -121,14 +121,21 @@ class MusixmatchLoggingTest {
     @Test
     fun playbackFallbackOneTerminalOneSuccess_winnerLogged() = runBlocking {
         Musixmatch.logger = { logs.add(it) }
+        val release1 = CompletableDeferred<Unit>()
         Musixmatch.resetForTesting(MockEngine { request ->
             when (request.url.encodedPath.substringAfterLast('/')) {
                 "track.search" -> respond(envelope("{\"track_list\":[{\"track\":${track(1)}},{\"track\":${track(2)}}]}"), headers = headers)
                 "macro.subtitles.get" -> {
                     val id = request.url.parameters["track_id"]?.toLongOrNull()
                     if (id == null) respond(macro(matcherStatus = 404), headers = headers)
-                    else if (id == 1L) respond(status(429), headers = headers)
-                    else respond(macro(id), headers = headers)
+                    else if (id == 1L) {
+                        release1.await()
+                        respond(status(429), headers = headers)
+                    } else {
+                        val resp = macro(id)
+                        release1.complete(Unit)
+                        respond(resp, headers = headers)
+                    }
                 }
                 else -> error("Unexpected endpoint: ${request.url.encodedPath}")
             }

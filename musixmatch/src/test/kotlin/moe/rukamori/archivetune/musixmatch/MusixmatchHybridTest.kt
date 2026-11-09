@@ -194,21 +194,12 @@ class MusixmatchHybridTest {
     }
 
     @Test
-    fun fallbackTerminalErrorYieldsToSuccessfulCandidate() = runBlocking {
+    fun fallbackRateLimitAndFailedRenewalStopBeforeSecondCandidate() = runBlocking {
         for (status in listOf(401, 429)) {
             setup(tracks = listOf(track(2), track(3)), titleMacro = macro(matcherStatus = 404), idStatuses = mapOf(2L to status), renewalStatus = 500)
-            assertEquals("Lyrics 3", playback().getOrThrow())
-            assertEquals(listOf(2L, 3L), ids())
-        }
-    }
-
-    @Test
-    fun fallbackTerminalErrorIsThrownWhenNoCandidateSucceeds() = runBlocking {
-        for (status in listOf(401, 429)) {
-            setup(tracks = listOf(track(2), track(3)), titleMacro = macro(matcherStatus = 404), idStatuses = mapOf(2L to status, 3L to status), renewalStatus = 500)
             val failure = playback().exceptionOrNull()
             assertTrue(failure is MusixmatchError.TokenInvalid || failure is MusixmatchError.RateLimited)
-            assertEquals(listOf(2L, 3L), ids())
+            assertEquals(listOf(2L), ids())
         }
     }
 
