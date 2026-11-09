@@ -6,6 +6,12 @@
  */
 package moe.rukamori.archivetune.musixmatch
 
+import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.isSuccess
+import kotlinx.serialization.json.Json
+import moe.rukamori.archivetune.musixmatch.models.ApiResponse
 import moe.rukamori.archivetune.musixmatch.models.Track
 
 sealed interface MacroTarget {
@@ -62,17 +68,17 @@ internal fun errorLabel(e: Throwable): String =
     else "OtherException"
 
 internal suspend inline fun <reified T> decodeApiResponse(
-    response: io.ktor.client.statement.HttpResponse,
-    jsonFormat: kotlinx.serialization.json.Json,
+    response: HttpResponse,
+    jsonFormat: Json,
     operation: String,
 ): T {
-    if (response.status == io.ktor.http.HttpStatusCode.Unauthorized) throw MusixmatchError.TokenInvalid("HTTP 401 on $operation")
-    if (response.status == io.ktor.http.HttpStatusCode.TooManyRequests) throw MusixmatchError.RateLimited("HTTP 429 on $operation")
+    if (response.status == HttpStatusCode.Unauthorized) throw MusixmatchError.TokenInvalid("HTTP 401 on $operation")
+    if (response.status == HttpStatusCode.TooManyRequests) throw MusixmatchError.RateLimited("HTTP 429 on $operation")
     if (response.status.value >= 500) throw MusixmatchError.ServerError(response.status.value)
-    if (!io.ktor.http.isSuccess(response.status.value)) throw MusixmatchError.MalformedResponse("HTTP ${response.status.value} on $operation")
+    if (!response.status.isSuccess()) throw MusixmatchError.MalformedResponse("HTTP ${response.status.value} on $operation")
 
     val bodyText = response.bodyAsText()
-    val apiResponse = runCatching { jsonFormat.decodeFromString<moe.rukamori.archivetune.musixmatch.models.ApiResponse<T>>(bodyText) }
+    val apiResponse = runCatching { jsonFormat.decodeFromString<ApiResponse<T>>(bodyText) }
         .getOrElse { throw MusixmatchError.MalformedResponse("Failed to parse $operation response") }
     val statusCode = apiResponse.message?.header?.statusCode ?: 0
     if (statusCode == 401) throw MusixmatchError.TokenInvalid("Status code 401 on $operation")
@@ -83,15 +89,15 @@ internal suspend inline fun <reified T> decodeApiResponse(
 }
 
 internal suspend inline fun <reified T> decodeStandaloneResponse(
-    response: io.ktor.client.statement.HttpResponse,
-    jsonFormat: kotlinx.serialization.json.Json,
+    response: HttpResponse,
+    jsonFormat: Json,
     operation: String,
 ): T? {
-    if (response.status == io.ktor.http.HttpStatusCode.Unauthorized) throw MusixmatchError.TokenInvalid("HTTP 401 on $operation")
-    if (response.status == io.ktor.http.HttpStatusCode.TooManyRequests) throw MusixmatchError.RateLimited("HTTP 429 on $operation")
-    if (!io.ktor.http.isSuccess(response.status.value)) return null
+    if (response.status == HttpStatusCode.Unauthorized) throw MusixmatchError.TokenInvalid("HTTP 401 on $operation")
+    if (response.status == HttpStatusCode.TooManyRequests) throw MusixmatchError.RateLimited("HTTP 429 on $operation")
+    if (!response.status.isSuccess()) return null
     val bodyText = response.bodyAsText()
-    val apiResponse = runCatching { jsonFormat.decodeFromString<moe.rukamori.archivetune.musixmatch.models.ApiResponse<T>>(bodyText) }.getOrNull() ?: return null
+    val apiResponse = runCatching { jsonFormat.decodeFromString<ApiResponse<T>>(bodyText) }.getOrNull() ?: return null
     val status = apiResponse.message?.header?.statusCode
     if (status == 401) throw MusixmatchError.TokenInvalid("Status code 401 on $operation")
     if (status == 429) throw MusixmatchError.RateLimited("Status code 429 on $operation")
