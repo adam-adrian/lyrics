@@ -35,7 +35,7 @@ internal class SearchTokenState(
     private var renewalUsed = false
 
     suspend fun <T> execute(block: suspend (String) -> T): T {
-        (terminalFailure as? MusixmatchError.RateLimited)?.let { throw it }
+        terminalFailure?.let { throw it }
         val previous = token
         try {
             return searchRequest { block(previous) }
@@ -58,10 +58,11 @@ internal class SearchTokenState(
                     } catch (failure: CancellationException) {
                         throw failure
                     } catch (failure: Exception) {
-                        val terminal = if (failure is MusixmatchError.RateLimited) failure
-                            else MusixmatchError.TokenInvalid("Search token renewal failed")
-                        terminalFailure = terminal
-                        throw terminal
+                        if (failure is MusixmatchError.RateLimited) {
+                            terminalFailure = failure
+                            throw failure
+                        }
+                        throw MusixmatchError.TokenInvalid("Search token renewal failed")
                     }
                     token
                 }
