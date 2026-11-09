@@ -13,8 +13,9 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -46,6 +47,16 @@ class MusixmatchLoggingTest {
         Musixmatch.logger = null
     }
 
+    private fun quote(value: String): String = Json.encodeToString(value)
+    private fun track(id: Long, length: Int = 100, title: String = "Song", artist: String = "Artist"): String =
+        """{"track_id":$id,"commontrack_id":${id + 1000},"track_name":${quote(title)},"artist_name":${quote(artist)},"track_length":$length,"instrumental":0,"track_rating":80}"""
+    private fun envelope(body: String, status: Int = 200) = """{"message":{"header":{"status_code":$status},"body":$body}}"""
+    private fun status(code: Int): String = """{"message":{"header":{"status_code":$code},"body":{}}}"""
+    private fun call(body: String, status: Int = 200) = """{"message":{"header":{"status_code":$status},"body":$body}}"""
+    private fun macro(id: Long = 1, matcherStatus: Int = 200, hasRichsync: Boolean = false): String = envelope(
+        """{"macro_calls":{"matcher.track.get":${call("{\"track\":${track(id)}}", matcherStatus)},"track.lyrics.get":${call("{\"lyrics\":{\"lyrics_body\":\"Text $id\",\"restricted\":0}}")},"track.subtitles.get":${call("{\"subtitle_list\":[{\"subtitle\":{\"subtitle_body\":\"[00:01.000] Sub $id\"}}]}")}${if (hasRichsync) ",\"track.richsync.get\":${call("{\"richsync\":{\"richsync_body\":\"[{\\\"ts\\\":1.0,\\\"te\\\":2.0,\\\"l\\\":[{\\\"c\\\":\\\"Word\\\",\\\"o\\\":0}]}]\"}}")}" else ""}}}"""
+    )
+
     private fun assertAllLogsMatchAllowlist() {
         for (line in logs) {
             val matches = allowlistPatterns.any { it.matches(line) }
@@ -59,11 +70,11 @@ class MusixmatchLoggingTest {
     fun playbackMainSuccess_logsClassAAndB() = runBlocking {
         Musixmatch.logger = { logs.add(it) }
         Musixmatch.resetForTesting(MockEngine {
-            respond(macro(lyrics = "Test lyrics"), headers = headers)
+            respond(macro(1), headers = headers)
         })
         Musixmatch.cachedToken = "test_token"
 
-        val result = Musixmatch.getLyrics("Levitating", "Dua Lipa")
+        val result = Musixmatch.getLyrics("Song", "Artist", durationSeconds = 100)
         assertTrue(result.isSuccess)
 
         assertAllLogsMatchAllowlist()
@@ -85,7 +96,7 @@ class MusixmatchLoggingTest {
                 "macro.subtitles.get" -> {
                     val id = request.url.parameters["track_id"]?.toLongOrNull()
                     if (id == null) respond(macro(matcherStatus = 404), headers = headers)
-                    else respond(macro(id, richsync = "richsync"), headers = headers)
+                    else respond(macro(id, hasRichsync = (id == 1L)), headers = headers)
                 }
                 else -> error("Unexpected endpoint: ${request.url.encodedPath}")
             }
@@ -101,6 +112,9 @@ class MusixmatchLoggingTest {
         assertTrue(logs.contains("Musixmatch fallback: ranked search"))
         assertTrue(logs.contains("Musixmatch fallback: track search request started"))
         assertTrue(logs.any { it.startsWith("Musixmatch fallback: search funnel:") })
+        assertTrue(logs.contains("Musixmatch fallback ranked 1: success demerit=0 quality=2 rating=80"))
+        assertTrue(logs.contains("Musixmatch fallback: early-stop"))
+        assertTrue(logs.contains("Musixmatch fallback ranked 2: cancelled (early-stop)"))
         assertTrue(logs.contains("Musixmatch fallback: winner from ranked 1"))
     }
 
@@ -121,7 +135,7 @@ class MusixmatchLoggingTest {
         })
         Musixmatch.cachedToken = "test_token"
 
-        val result = Musixmatch.getLyrics("Song", "Artist")
+        val result = Musixmatch.getLyrics("Song", "Artist", durationSeconds = 100)
         assertTrue(result.isSuccess)
 
         assertAllLogsMatchAllowlist()
@@ -146,7 +160,7 @@ class MusixmatchLoggingTest {
         })
         Musixmatch.cachedToken = "test_token"
 
-        val result = Musixmatch.getLyrics("Song", "Artist")
+        val result = Musixmatch.getLyrics("Song", "Artist", durationSeconds = 100)
         assertTrue(result.isFailure)
 
         assertAllLogsMatchAllowlist()
@@ -159,14 +173,14 @@ class MusixmatchLoggingTest {
         Musixmatch.resetForTesting(MockEngine { request ->
             when (request.url.encodedPath.substringAfterLast('/')) {
                 "track.search" -> respond(envelope("{\"track_list\":[]}"), headers = headers)
-                "macro.subtitles.get" -> respond(macro(), headers = headers)
+                "macro.subtitles.get" -> respond(macro(1), headers = headers)
                 else -> error("Unexpected endpoint: ${request.url.encodedPath}")
             }
         })
         Musixmatch.cachedToken = "test_token"
 
         val lyricsList = mutableListOf<String>()
-        Musixmatch.getAllLyrics("Song", "Artist", callback = lyricsList::add)
+        Musixmatch.getAllLyrics("Song", "Artist", durationSeconds = 100, callback = lyricsList::add)
         assertEquals(1, lyricsList.size)
 
         assertAllLogsMatchAllowlist()
@@ -205,7 +219,7 @@ class MusixmatchLoggingTest {
 
         val op = async {
             runCatching {
-                Musixmatch.getAllLyrics("Song", "Artist") {}
+                Musixmatch.getAllLyrics("Song", "Artist", durationSeconds = 100) {}
             }
         }
         entered1.await()
