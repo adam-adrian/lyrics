@@ -166,10 +166,12 @@ object Musixmatch {
         return decodeApiResponse(response, "search")
     }
 
-    internal suspend fun executeMacroByTrackId(
-        trackId: Long,
+    internal suspend fun executeMacro(
+        target: MacroTarget,
         token: String,
     ): MacroResponseBody {
+        val isByName = target is MacroTarget.ByName
+        if (isByName) logger?.invoke("Musixmatch macro request started")
         val response =
             client.get("${BASE_URL}macro.subtitles.get") {
                 parameter("format", "json")
@@ -179,10 +181,30 @@ object Musixmatch {
                 parameter("optional_calls", "track.richsync")
                 parameter("richsync_compact_type", "words")
                 parameter("part", "track_lyrics_translation_status,track_structure,track_performer_tagging")
-                parameter("track_id", trackId)
                 parameter("usertoken", token)
+
+                when (target) {
+                    is MacroTarget.ByName -> {
+                        parameter("q_track", target.title)
+                        parameter("q_artist", target.artist)
+                        parameter("q_artists", target.artist)
+                        if (!target.album.isNullOrBlank()) {
+                            parameter("q_album", target.album)
+                        }
+                        if (target.durationSeconds > 0) {
+                            parameter("q_duration", target.durationSeconds)
+                            parameter("f_subtitle_length", target.durationSeconds)
+                        }
+                    }
+                    is MacroTarget.ById -> {
+                        parameter("track_id", target.trackId)
+                    }
+                }
             }
-        return decodeApiResponse(response, "macro")
+
+        val body = decodeApiResponse<MacroResponseBody>(response, "macro")
+        if (isByName) logger?.invoke("Musixmatch macro response received")
+        return body
     }
 
     private suspend inline fun <reified T> decodeApiResponse(
@@ -203,42 +225,6 @@ object Musixmatch {
         if (statusCode >= 500) throw MusixmatchError.ServerError(statusCode)
         if (statusCode != 200) throw MusixmatchError.MalformedResponse("Status code $statusCode on $operation")
         return apiResponse.message?.body ?: throw MusixmatchError.MalformedResponse("Empty $operation body")
-    }
-
-    internal suspend fun executeMacro(
-        title: String,
-        artist: String,
-        album: String?,
-        durationSeconds: Int,
-        token: String,
-    ): MacroResponseBody {
-        logger?.invoke("Musixmatch macro request started")
-        val response =
-            client.get("${BASE_URL}macro.subtitles.get") {
-                parameter("format", "json")
-                parameter("namespace", "lyrics_richsynched")
-                parameter("subtitle_format", "mxm")
-                parameter("app_id", APP_ID)
-                parameter("optional_calls", "track.richsync")
-                parameter("richsync_compact_type", "words")
-                parameter("part", "track_lyrics_translation_status,track_structure,track_performer_tagging")
-                parameter("q_track", title)
-                parameter("q_artist", artist)
-                parameter("q_artists", artist)
-                parameter("usertoken", token)
-
-                if (!album.isNullOrBlank()) {
-                    parameter("q_album", album)
-                }
-                if (durationSeconds > 0) {
-                    parameter("q_duration", durationSeconds)
-                    parameter("f_subtitle_length", durationSeconds)
-                }
-            }
-
-        val body = decodeApiResponse<MacroResponseBody>(response, "macro")
-        logger?.invoke("Musixmatch macro response received")
-        return body
     }
 
     private suspend inline fun <reified T> decodeStandaloneResponse(
@@ -322,20 +308,15 @@ object Musixmatch {
     }
 
     internal suspend fun resolveRequest(target: MacroTarget, tokenState: SearchTokenState): ResolvedLyrics {
-        val (calls, track) = when (target) {
+        val calls = tokenState.execute { token -> executeMacro(target, token) }.macroCalls
+        val track = when (target) {
             is MacroTarget.ByName -> {
-                val macroCalls = tokenState.execute { token ->
-                    executeMacro(target.title, target.artist, target.album, target.durationSeconds, token)
-                }.macroCalls
-                val matched = matchedTrack(macroCalls)
+                val matched = matchedTrack(calls)
                 validateMatch(matched, target.title, target.artist, target.durationSeconds)
-                macroCalls to matched
+                matched
             }
             is MacroTarget.ById -> {
-                val macroCalls = tokenState.execute { token ->
-                    executeMacroByTrackId(target.trackId, token)
-                }.macroCalls
-                val matched = matchedTrack(macroCalls, target.trackId)
+                val matched = matchedTrack(calls, target.trackId)
                 if (target.title.isNotEmpty() || target.artist.isNotEmpty()) {
                     validateMatch(matched, target.title, target.artist, target.durationSeconds)
                 } else if (target.durationSeconds > 0 && matched.trackLength > 0 &&
@@ -343,7 +324,7 @@ object Musixmatch {
                 ) {
                     throw MusixmatchError.Mismatch("Matcher metadata no longer matches candidate")
                 }
-                macroCalls to matched
+                matched
             }
         }
         if (calls?.trackLyricsGet.bodyAs<LyricsBody>(jsonFormat)?.lyrics?.isRestricted == true) {
