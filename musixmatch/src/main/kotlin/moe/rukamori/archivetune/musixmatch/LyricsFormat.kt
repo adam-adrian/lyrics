@@ -7,13 +7,8 @@
 package moe.rukamori.archivetune.musixmatch
 
 import kotlinx.serialization.json.Json
-import moe.rukamori.archivetune.musixmatch.models.LyricsBody
-import moe.rukamori.archivetune.musixmatch.models.MatcherBody
-import moe.rukamori.archivetune.musixmatch.models.RichSyncBody
 import moe.rukamori.archivetune.musixmatch.models.RichSyncLine
 import moe.rukamori.archivetune.musixmatch.models.SubtitleLine
-import moe.rukamori.archivetune.musixmatch.models.SubtitlesBody
-import moe.rukamori.archivetune.musixmatch.models.bodyAs
 import java.util.Locale
 
 internal class LyricsFormat(private val jsonFormat: Json) {
@@ -23,46 +18,22 @@ internal class LyricsFormat(private val jsonFormat: Json) {
             "these lyrics are not for commercial use",
         )
 
-    fun resolveMacroLyrics(
-        calls: moe.rukamori.archivetune.musixmatch.models.MacroCalls?,
-        richSyncBodyStr: String? = null,
-    ): String {
-        val lyricsData = calls?.trackLyricsGet.bodyAs<LyricsBody>(jsonFormat)?.lyrics
-        if (lyricsData?.isRestricted == true) throw MusixmatchError.Restricted()
+    fun tryTtml(richSync: String?): String? {
+        if (richSync.isNullOrBlank()) return null
+        return runCatching {
+            val lines = jsonFormat.decodeFromString<List<RichSyncLine>>(richSync)
+            MusixmatchTtml.convertRichSyncToTtml(lines)
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+    }
 
-        if (calls?.matcherTrackGet.bodyAs<MatcherBody>(jsonFormat)?.track?.isInstrumental == true) {
-            return "♪ Instrumental ♪"
-        }
+    fun tryLrc(subtitleBody: String?): String? {
+        if (subtitleBody.isNullOrBlank()) return null
+        return formatSubtitlesToLrc(subtitleBody)?.takeIf { it.isNotBlank() }
+    }
 
-        val macroRichSync = calls?.trackRichsyncGet
-            ?.takeIf { it.message.header.statusCode == 200 }
-            .bodyAs<RichSyncBody>(jsonFormat)
-            ?.richsync?.richsyncBody
-        val richSync = richSyncBodyStr ?: macroRichSync
-        if (!richSync.isNullOrBlank()) {
-            val ttml = runCatching {
-                val lines = jsonFormat.decodeFromString<List<RichSyncLine>>(richSync)
-                MusixmatchTtml.convertRichSyncToTtml(lines)
-            }.getOrNull()
-            if (!ttml.isNullOrBlank()) return ttml
-        }
-
-        val subtitleBody = calls?.trackSubtitlesGet
-            ?.takeIf { it.message.header.statusCode == 200 }
-            .bodyAs<SubtitlesBody>(jsonFormat)
-            ?.subtitleList?.firstOrNull()?.subtitle?.subtitleBody
-        if (!subtitleBody.isNullOrBlank()) {
-            formatSubtitlesToLrc(subtitleBody)?.takeIf { it.isNotBlank() }?.let { return it }
-        }
-
-        val plain = calls?.trackLyricsGet
-            ?.takeIf { it.message.header.statusCode == 200 }
-            .bodyAs<LyricsBody>(jsonFormat)
-            ?.lyrics?.lyricsBody
-        if (!plain.isNullOrBlank()) {
-            cleanPlainLyrics(plain).takeIf { it.isNotBlank() }?.let { return it }
-        }
-        throw MusixmatchError.NoMatch("No lyrics found in any format")
+    fun tryPlain(lyricsBody: String?): String? {
+        if (lyricsBody.isNullOrBlank()) return null
+        return cleanPlainLyrics(lyricsBody).takeIf { it.isNotBlank() }
     }
 
     private fun formatLrcTimestamp(seconds: Double): String {
