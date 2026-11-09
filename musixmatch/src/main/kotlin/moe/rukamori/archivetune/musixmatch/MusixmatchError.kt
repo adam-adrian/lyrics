@@ -11,6 +11,7 @@ internal sealed class MusixmatchError(message: String) : Exception(message) {
     class RateLimited(detail: String) : MusixmatchError("Rate limited: $detail")
     class NoMatch(detail: String) : MusixmatchError("No match: $detail")
     class Restricted : MusixmatchError("Lyrics restricted")
+    class Instrumental(message: String = "Track is instrumental") : MusixmatchError(message)
     class ServerError(code: Int) : MusixmatchError("Server error: $code")
     class MalformedResponse(detail: String) : MusixmatchError("Malformed response: $detail")
     class Mismatch(detail: String) : MusixmatchError("Match rejected: $detail")

@@ -32,7 +32,9 @@ import moe.rukamori.archivetune.musixmatch.models.ApiResponse
 import moe.rukamori.archivetune.musixmatch.models.LyricsBody
 import moe.rukamori.archivetune.musixmatch.models.MacroResponseBody
 import moe.rukamori.archivetune.musixmatch.models.MacroCalls
+import moe.rukamori.archivetune.musixmatch.models.MacroTarget
 import moe.rukamori.archivetune.musixmatch.models.MatcherBody
+import moe.rukamori.archivetune.musixmatch.models.ResolvedLyrics
 import moe.rukamori.archivetune.musixmatch.models.RichSyncBody
 import moe.rukamori.archivetune.musixmatch.models.SearchBody
 import moe.rukamori.archivetune.musixmatch.models.TokenBody
@@ -325,6 +327,38 @@ object Musixmatch {
         return track
     }
 
+    internal suspend fun resolveRequest(target: MacroTarget, tokenState: SearchTokenState): ResolvedLyrics {
+        val (calls, track) = when (target) {
+            is MacroTarget.ByName -> {
+                val macroCalls = tokenState.execute { token ->
+                    executeMacro(target.title, target.artist, target.album, target.durationSeconds, token)
+                }.macroCalls
+                val matched = matchedTrack(macroCalls)
+                validateMatch(matched, target.title, target.artist, target.durationSeconds)
+                macroCalls to matched
+            }
+            is MacroTarget.ById -> {
+                val macroCalls = tokenState.execute { token ->
+                    executeMacroByTrackId(target.trackId, token)
+                }.macroCalls
+                val matched = matchedTrack(macroCalls, target.trackId)
+                validateMatch(matched, target.title, target.artist, target.durationSeconds)
+                macroCalls to matched
+            }
+        }
+        if (calls?.trackLyricsGet.bodyAs<LyricsBody>(jsonFormat)?.lyrics?.isRestricted == true) {
+            throw MusixmatchError.Restricted()
+        }
+        if (track.isInstrumental) throw MusixmatchError.Instrumental()
+        val inline = calls?.trackRichsyncGet
+            ?.takeIf { it.message.header.statusCode == 200 }
+            .bodyAs<RichSyncBody>(jsonFormat)?.richsync?.richsyncBody
+        val additional = if (inline == null && track.isRichsyncAvailable) {
+            tokenState.execute { token -> fetchRichSyncSeparately(track.commonTrackId, track.trackLength, token) }
+        } else null
+        return ResolvedLyrics(lyricsFormat.resolveMacroLyrics(calls, additional), 0)
+    }
+
     internal suspend fun resolveTrackLyrics(calls: MacroCalls?, track: Track, tokenState: SearchTokenState): String {
         if (calls?.trackLyricsGet.bodyAs<LyricsBody>(jsonFormat)?.lyrics?.isRestricted == true) {
             throw MusixmatchError.Restricted()
@@ -354,12 +388,14 @@ object Musixmatch {
         return try {
             val tokenState = SearchTokenState(searchRequest { getToken() }, ::renewToken)
             val lyrics = try {
-                val calls = tokenState.execute { token ->
-                    executeMacro(cleanTitle, cleanArtist, cleanAlbum, durationSeconds, token)
-                }.macroCalls
-                val track = matchedTrack(calls)
-                validateMatch(track, cleanTitle, cleanArtist, durationSeconds)
-                resolveTrackLyrics(calls, track, tokenState)
+                try {
+                    resolveRequest(
+                        MacroTarget.ByName(cleanTitle, cleanArtist, cleanAlbum, durationSeconds),
+                        tokenState,
+                    ).lyrics
+                } catch (e: MusixmatchError.Instrumental) {
+                    "♪ Instrumental ♪"
+                }
             } catch (e: MusixmatchError.NoMatch) {
                 resolveSearchFallback(tokenState, cleanTitle, cleanArtist, durationSeconds)
             } catch (e: MusixmatchError.Mismatch) {

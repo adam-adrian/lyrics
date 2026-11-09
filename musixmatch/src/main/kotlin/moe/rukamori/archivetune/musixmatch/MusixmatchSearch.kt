@@ -7,6 +7,7 @@
 package moe.rukamori.archivetune.musixmatch
 
 import kotlinx.coroutines.CancellationException
+import moe.rukamori.archivetune.musixmatch.models.MacroTarget
 import moe.rukamori.archivetune.musixmatch.models.SearchBody
 import moe.rukamori.archivetune.musixmatch.models.Track
 import kotlin.math.abs
@@ -69,17 +70,19 @@ internal fun validateMatch(
     val normTrackArtist = normalizeString(track.artistName)
     val normInputArtist = normalizeString(inputArtist)
 
-    val titleOk =
-        normTrackTitle.isNotEmpty() &&
-            normInputTitle.isNotEmpty() &&
-            (normTrackTitle.contains(normInputTitle) || normInputTitle.contains(normTrackTitle))
-    val artistOk =
-        normTrackArtist.isNotEmpty() &&
-            normInputArtist.isNotEmpty() &&
-            (normTrackArtist.contains(normInputArtist) || normInputArtist.contains(normTrackArtist))
+    if (normInputTitle.isNotEmpty() || normInputArtist.isNotEmpty()) {
+        val titleOk =
+            normTrackTitle.isNotEmpty() &&
+                normInputTitle.isNotEmpty() &&
+                (normTrackTitle.contains(normInputTitle) || normInputTitle.contains(normTrackTitle))
+        val artistOk =
+            normTrackArtist.isNotEmpty() &&
+                normInputArtist.isNotEmpty() &&
+                (normTrackArtist.contains(normInputArtist) || normInputArtist.contains(normTrackArtist))
 
-    if (!titleOk && !artistOk) {
-        throw MusixmatchError.Mismatch("Track and artist both mismatched")
+        if (!titleOk && !artistOk) {
+            throw MusixmatchError.Mismatch("Track and artist both mismatched")
+        }
     }
 }
 private data class RankedTrack(val track: Track, val demerit: Int)
@@ -123,17 +126,18 @@ internal suspend fun Musixmatch.resolveSearchFallback(
     var lastFailure: MusixmatchError? = null
     for (candidate in selectSearchCandidates(body, title, durationSeconds, SEARCH_FALLBACK_MAX_ATTEMPTS)) {
         try {
-            val calls = tokenState.execute { token -> executeMacroByTrackId(candidate.trackId, token) }.macroCalls
-            val track = matchedTrack(calls, candidate.trackId)
-            validateMatch(track, title, artist, durationSeconds)
-            if (track.isInstrumental) throw MusixmatchError.NoMatch("Instrumental search candidate")
-            return resolveTrackLyrics(calls, track, tokenState)
+            return resolveRequest(
+                MacroTarget.ById(candidate.trackId, title, artist, durationSeconds),
+                tokenState,
+            ).lyrics
         } catch (e: CancellationException) {
             throw e
         } catch (e: MusixmatchError.TokenInvalid) {
             throw e
         } catch (e: MusixmatchError.RateLimited) {
             throw e
+        } catch (e: MusixmatchError.Instrumental) {
+            lastFailure = MusixmatchError.NoMatch("Instrumental search candidate")
         } catch (e: MusixmatchError) {
             lastFailure = e
         }
@@ -149,10 +153,10 @@ internal suspend fun Musixmatch.resolveTitleFallbackForSearch(
     durationSeconds: Int,
 ): String? = try {
     logger?.invoke("Musixmatch search fallback: title matcher")
-    val calls = tokenState.execute { token -> executeMacro(title, artist, album, durationSeconds, token) }.macroCalls
-    val track = matchedTrack(calls)
-    validateMatch(track, title, artist, durationSeconds)
-    if (track.isInstrumental) null else resolveTrackLyrics(calls, track, tokenState)
+    resolveRequest(
+        MacroTarget.ByName(title, artist, album, durationSeconds),
+        tokenState,
+    ).lyrics
 } catch (e: CancellationException) {
     throw e
 } catch (e: MusixmatchError.TokenInvalid) {
