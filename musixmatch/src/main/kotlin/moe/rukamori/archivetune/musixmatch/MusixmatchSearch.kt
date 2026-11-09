@@ -7,6 +7,7 @@
 package moe.rukamori.archivetune.musixmatch
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -135,7 +136,8 @@ internal suspend fun Musixmatch.resolveSearchFallback(
     val outcomes = mutableListOf<CandidateOutcome>()
     coroutineScope {
         val channel = Channel<CandidateOutcome>(candidates.size)
-        val jobs = candidates.mapIndexed { index, candidate ->
+        lateinit var jobs: List<Job>
+        jobs = candidates.mapIndexed { index, candidate ->
             val rank = index + 1
             launch {
                 val outcome = try {
@@ -156,7 +158,11 @@ internal suspend fun Musixmatch.resolveSearchFallback(
                     CandidateOutcome.TerminalFailure(candidate, rank, e)
                 } catch (e: MusixmatchError.RateLimited) {
                     logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
-                    CandidateOutcome.TerminalFailure(candidate, rank, e)
+                    jobs.forEachIndexed { idx, j -> if (idx + 1 != rank) j.cancel() }
+                    val terminal = CandidateOutcome.TerminalFailure(candidate, rank, e)
+                    channel.send(terminal)
+                    channel.close()
+                    return@launch
                 } catch (e: Exception) {
                     logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
                     CandidateOutcome.LocalFailure(candidate, rank, e)
@@ -166,7 +172,7 @@ internal suspend fun Musixmatch.resolveSearchFallback(
         }
 
         for (i in candidates.indices) {
-            val outcome = channel.receive()
+            val outcome = channel.receiveCatching().getOrNull() ?: break
             outcomes.add(outcome)
 
             val successes = outcomes.filterIsInstance<CandidateOutcome.Success>()
