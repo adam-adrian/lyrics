@@ -47,3 +47,8 @@ internal sealed interface CandidateOutcome {
         val error: Throwable,
     ) : CandidateOutcome
 }
+
+internal fun errorLabel(e: Throwable): String =
+    if (e is MusixmatchError) e::class.simpleName ?: "MusixmatchError"
+    else "OtherException"
+

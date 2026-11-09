@@ -17,6 +17,7 @@ import moe.rukamori.archivetune.musixmatch.models.ResolvedLyrics
 import moe.rukamori.archivetune.musixmatch.models.SearchBody
 import moe.rukamori.archivetune.musixmatch.models.SearchCandidate
 import moe.rukamori.archivetune.musixmatch.models.Track
+import moe.rukamori.archivetune.musixmatch.models.errorLabel
 import kotlin.math.abs
 
 internal const val DURATION_TOLERANCE = 8
@@ -43,10 +44,10 @@ private fun isSearchCandidate(track: Track, durationSeconds: Int): Boolean =
         (durationSeconds <= 0 || track.trackLength <= 0 ||
             abs(track.trackLength - durationSeconds) <= DURATION_TOLERANCE)
 
-internal fun Musixmatch.logSearchFunnel(body: SearchBody, durationSeconds: Int, selectedCount: Int) {
+internal fun Musixmatch.logSearchFunnel(pathLabel: String, body: SearchBody, durationSeconds: Int, selectedCount: Int) {
     logger?.let { log ->
         val eligible = body.trackList.count { it.track?.let { track -> isSearchCandidate(track, durationSeconds) } == true }
-        log("Musixmatch search: returned=${body.trackList.size} eligible=$eligible candidates=$selectedCount")
+        log("Musixmatch $pathLabel: search funnel: returned=${body.trackList.size} eligible=$eligible candidates=$selectedCount")
     }
 }
 
@@ -130,9 +131,10 @@ internal suspend fun Musixmatch.resolveSearchFallback(
     artist: String,
     durationSeconds: Int,
 ): String {
-    logger?.invoke("Musixmatch playback fallback: ranked search")
-    val body = tokenState.execute { token -> executeTrackSearch(title, artist, token) }
+    logger?.invoke("Musixmatch fallback: ranked search")
+    val body = tokenState.execute { token -> executeTrackSearch(title, artist, token, "fallback") }
     val candidates = selectSearchCandidates(body, title, durationSeconds, SEARCH_FALLBACK_MAX_ATTEMPTS)
+    logSearchFunnel("fallback", body, durationSeconds, candidates.size)
     if (candidates.isEmpty()) throw MusixmatchError.NoMatch("Search fallback returned no usable lyrics")
 
     val outcomes = mutableListOf<CandidateOutcome>()
@@ -145,15 +147,23 @@ internal suspend fun Musixmatch.resolveSearchFallback(
                     val resolved = resolveRequest(
                         MacroTarget.ById(candidate.track.trackId, title, artist, durationSeconds),
                         tokenState,
+                        "fallback ranked $rank",
                     )
+                    logger?.invoke("Musixmatch fallback ranked $rank: success demerit=${candidate.demerit} quality=${resolved.quality} rating=${candidate.track.trackRating}")
                     CandidateOutcome.Success(candidate, rank, resolved)
                 } catch (e: CancellationException) {
                     throw e
+                } catch (e: MusixmatchError.Instrumental) {
+                    logger?.invoke("Musixmatch fallback ranked $rank: instrumental")
+                    CandidateOutcome.LocalFailure(candidate, rank, e)
                 } catch (e: MusixmatchError.TokenInvalid) {
+                    logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
                     CandidateOutcome.TerminalFailure(candidate, rank, e)
                 } catch (e: MusixmatchError.RateLimited) {
+                    logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
                     CandidateOutcome.TerminalFailure(candidate, rank, e)
                 } catch (e: Exception) {
+                    logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
                     CandidateOutcome.LocalFailure(candidate, rank, e)
                 }
                 channel.send(outcome)
@@ -177,8 +187,12 @@ internal suspend fun Musixmatch.resolveSearchFallback(
                     FALLBACK_SUCCESS_COMPARATOR.compare(bestSuccess, maxPossibleRemaining) <= 0
                 }
                 if (isUnbeatable && remainingCandidates.isNotEmpty()) {
+                    logger?.invoke("Musixmatch fallback: early-stop")
                     jobs.forEachIndexed { idx, job ->
-                        if (idx + 1 != bestSuccess.rank) job.cancel()
+                        if (idx + 1 != bestSuccess.rank) {
+                            logger?.invoke("Musixmatch fallback ranked ${idx + 1}: cancelled (early-stop)")
+                            job.cancel()
+                        }
                     }
                     break
                 }
@@ -189,19 +203,23 @@ internal suspend fun Musixmatch.resolveSearchFallback(
     val bestSuccess = outcomes.filterIsInstance<CandidateOutcome.Success>()
         .minWithOrNull(FALLBACK_SUCCESS_COMPARATOR)
     if (bestSuccess != null) {
+        logger?.invoke("Musixmatch fallback: winner from ranked ${bestSuccess.rank}")
         return bestSuccess.lyrics.lyrics
     }
 
     val terminals = outcomes.filterIsInstance<CandidateOutcome.TerminalFailure>()
     if (terminals.isNotEmpty()) {
-        throw terminals.minByOrNull { it.rank }!!.error
+        val bestTerminal = terminals.minByOrNull { it.rank }!!
+        logger?.invoke("Musixmatch fallback: final terminal (${errorLabel(bestTerminal.error)}) from ranked ${bestTerminal.rank}")
+        throw bestTerminal.error
     }
 
     val localFailures = outcomes.filterIsInstance<CandidateOutcome.LocalFailure>()
     if (localFailures.isNotEmpty()) {
-        val bestLocal = localFailures.minByOrNull { it.rank }!!.error
-        if (bestLocal is MusixmatchError) throw bestLocal
-        throw MusixmatchError.NoMatch(bestLocal.message ?: "Local failure in search candidate")
+        val bestLocal = localFailures.minByOrNull { it.rank }!!
+        logger?.invoke("Musixmatch fallback: all candidates failed (${errorLabel(bestLocal.error)}) from ranked ${bestLocal.rank}")
+        if (bestLocal.error is MusixmatchError) throw bestLocal.error
+        throw MusixmatchError.NoMatch(bestLocal.error.message ?: "Local failure in search candidate")
     }
 
     throw MusixmatchError.NoMatch("Search fallback returned no usable lyrics")
@@ -214,17 +232,29 @@ internal suspend fun Musixmatch.resolveTitleFallbackForSearch(
     album: String,
     durationSeconds: Int,
 ): String? = try {
-    logger?.invoke("Musixmatch search fallback: title matcher")
-    resolveRequest(
+    logger?.invoke("Musixmatch title-fallback: title matcher")
+    val res = resolveRequest(
         MacroTarget.ByName(title, artist, album, durationSeconds),
         tokenState,
-    ).lyrics
+        "title-fallback",
+    )
+    logger?.invoke("Musixmatch title-fallback: success quality=${res.quality}")
+    res.lyrics
 } catch (e: CancellationException) {
     throw e
+} catch (e: MusixmatchError.Instrumental) {
+    logger?.invoke("Musixmatch title-fallback: instrumental")
+    null
 } catch (e: MusixmatchError.TokenInvalid) {
+    logger?.invoke("Musixmatch title-fallback: failed (${errorLabel(e)})")
     throw e
 } catch (e: MusixmatchError.RateLimited) {
+    logger?.invoke("Musixmatch title-fallback: failed (${errorLabel(e)})")
     throw e
 } catch (e: MusixmatchError) {
+    logger?.invoke("Musixmatch title-fallback: failed (${errorLabel(e)})")
+    null
+} catch (e: Exception) {
+    logger?.invoke("Musixmatch title-fallback: failed (${errorLabel(e)})")
     null
 }

@@ -80,7 +80,7 @@ class MusixmatchSubtitleSearchTest {
         assertEquals("1", req.parameters["track_id"])
         assertEquals("mxm", req.parameters["subtitle_format"])
         assertEquals("100", req.parameters["f_subtitle_length"])
-        assertTrue(logs.contains("Musixmatch separate subtitle request started"))
+        assertTrue(logs.any { it.endsWith("separate subtitle request started") })
     }
 
     @Test
