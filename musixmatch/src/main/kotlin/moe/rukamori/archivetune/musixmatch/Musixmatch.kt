@@ -180,14 +180,12 @@ object Musixmatch {
                 parameter("app_id", APP_ID)
                 parameter("optional_calls", "track.richsync")
                 parameter("richsync_compact_type", "words")
-                parameter("part", "track_lyrics_translation_status,track_structure,track_performer_tagging")
                 parameter("usertoken", token)
 
                 when (target) {
                     is MacroTarget.ByName -> {
                         parameter("q_track", target.title)
                         parameter("q_artist", target.artist)
-                        parameter("q_artists", target.artist)
                         if (!target.album.isNullOrBlank()) {
                             parameter("q_album", target.album)
                         }
