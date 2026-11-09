@@ -159,6 +159,7 @@ internal suspend fun Musixmatch.resolveSearchFallback(
                     CandidateOutcome.TerminalFailure(candidate, rank, e)
                 } catch (e: MusixmatchError.RateLimited) {
                     logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
+                    jobs.forEachIndexed { idx, j -> if (idx + 1 > rank) j.cancel() }
                     CandidateOutcome.TerminalFailure(candidate, rank, e)
                 } catch (e: Exception) {
                     logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
