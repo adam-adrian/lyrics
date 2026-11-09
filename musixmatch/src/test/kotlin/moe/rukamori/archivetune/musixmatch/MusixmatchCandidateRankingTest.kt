@@ -6,10 +6,7 @@
  */
 package moe.rukamori.archivetune.musixmatch
 
-import moe.rukamori.archivetune.musixmatch.models.CandidateOutcome
-import moe.rukamori.archivetune.musixmatch.models.ResolvedLyrics
 import moe.rukamori.archivetune.musixmatch.models.SearchBody
-import moe.rukamori.archivetune.musixmatch.models.SearchCandidate
 import moe.rukamori.archivetune.musixmatch.models.SearchTrackItem
 import moe.rukamori.archivetune.musixmatch.models.Track
 import kotlinx.serialization.json.Json
