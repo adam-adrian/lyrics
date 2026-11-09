@@ -142,7 +142,7 @@ internal suspend fun Musixmatch.resolveSearchFallback(
         jobs = candidates.mapIndexed { index, candidate ->
             val rank = index + 1
             launch {
-                if (index > 0) yield()
+                if (index > 0) repeat(10) { yield() }
                 val outcome = try {
                     val resolved = resolveRequest(
                         MacroTarget.ById(candidate.track.trackId, title, artist, durationSeconds),
