@@ -194,13 +194,25 @@ class MusixmatchHybridTest {
     }
 
     @Test
-    fun fallbackRateLimitAndFailedRenewalStopBeforeSecondCandidate() = runBlocking {
-        for (status in listOf(401, 429)) {
-            setup(tracks = listOf(track(2), track(3)), titleMacro = macro(matcherStatus = 404), idStatuses = mapOf(2L to status), renewalStatus = 500)
-            val failure = playback().exceptionOrNull()
-            assertTrue(failure is MusixmatchError.TokenInvalid || failure is MusixmatchError.RateLimited)
-            assertEquals(listOf(2L), ids())
-        }
+    fun fallbackRateLimitStopsBeforeSecondCandidate() = runBlocking {
+        setup(tracks = listOf(track(2), track(3)), titleMacro = macro(matcherStatus = 404), idStatuses = mapOf(2L to 429))
+        val failure = playback().exceptionOrNull()
+        assertTrue(failure is MusixmatchError.RateLimited)
+        assertEquals(listOf(2L), ids())
+    }
+
+    @Test
+    fun fallbackFailedRenewalWhenAllCandidatesUnauthorizedReturnsTokenInvalid() = runBlocking {
+        setup(tracks = listOf(track(2), track(3)), titleMacro = macro(matcherStatus = 404), idStatuses = mapOf(2L to 401, 3L to 401), renewalStatus = 500)
+        val failure = playback().exceptionOrNull()
+        assertTrue(failure is MusixmatchError.TokenInvalid)
+    }
+
+    @Test
+    fun fallbackUnauthorizedCandidateYieldsToConcurrentSuccessfulCandidate() = runBlocking {
+        setup(tracks = listOf(track(2), track(3)), titleMacro = macro(matcherStatus = 404), idStatuses = mapOf(2L to 401), renewalStatus = 500)
+        assertEquals("Lyrics 3", playback().getOrThrow())
+        assertEquals(listOf(2L, 3L), ids())
     }
 
     @Test
