@@ -351,24 +351,16 @@ object Musixmatch {
         }
         if (track.isInstrumental) throw MusixmatchError.Instrumental()
 
-        val inlineRichsync = calls?.trackRichsyncGet
-            ?.takeIf { it.message.header.statusCode == 200 }
-            .bodyAs<RichSyncBody>(jsonFormat)?.richsync?.richsyncBody
-        val ttml = lyricsFormat.tryTtml(inlineRichsync)
-        val richsync = if (ttml != null) {
-            return ResolvedLyrics(ttml, 2)
+        val richsync = if (calls?.trackRichsyncGet?.message?.header?.statusCode == 200) {
+            calls.trackRichsyncGet.bodyAs<RichSyncBody>(jsonFormat)?.richsync?.richsyncBody
         } else if (track.isRichsyncAvailable) {
             tokenState.execute { token -> fetchRichSyncSeparately(track.commonTrackId, track.trackLength, token) }
         } else null
         lyricsFormat.tryTtml(richsync)?.let { return ResolvedLyrics(it, 2) }
 
-        val inlineSubtitle = calls?.trackSubtitlesGet
-            ?.takeIf { it.message.header.statusCode == 200 }
-            .bodyAs<SubtitlesBody>(jsonFormat)
-            ?.subtitleList?.firstOrNull()?.subtitle?.subtitleBody
-        val lrc = lyricsFormat.tryLrc(inlineSubtitle)
-        val subtitle = if (lrc != null) {
-            return ResolvedLyrics(lrc, 1)
+        val subtitle = if (calls?.trackSubtitlesGet?.message?.header?.statusCode == 200) {
+            calls.trackSubtitlesGet.bodyAs<SubtitlesBody>(jsonFormat)
+                ?.subtitleList?.firstOrNull()?.subtitle?.subtitleBody
         } else if (track.isSubtitlesAvailable) {
             tokenState.execute { token -> fetchSubtitleSeparately(track.trackId, track.trackLength, token) }
         } else null
