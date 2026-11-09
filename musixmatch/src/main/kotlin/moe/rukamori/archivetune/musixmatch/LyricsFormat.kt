@@ -18,6 +18,8 @@ internal class LyricsFormat(private val jsonFormat: Json) {
             "these lyrics are not for commercial use",
         )
 
+    private val lrcTimestampRegex = Regex("""\[\d{1,2}:\d{2}([.:]\d{1,3})?\]""")
+
     fun tryTtml(richSync: String?): String? {
         if (richSync.isNullOrBlank()) return null
         return runCatching {
@@ -29,7 +31,7 @@ internal class LyricsFormat(private val jsonFormat: Json) {
     fun tryLrc(subtitleBody: String?): String? {
         if (subtitleBody.isNullOrBlank()) return null
         return formatSubtitlesToLrc(subtitleBody)?.takeIf { it.isNotBlank() }
-            ?: subtitleBody.takeIf { it.trimStart().startsWith("[") }?.trim()?.takeIf { it.isNotBlank() }
+            ?: subtitleBody.takeIf { lrcTimestampRegex.containsMatchIn(it) }?.trim()?.takeIf { it.isNotBlank() }
     }
 
     fun tryPlain(lyricsBody: String?): String? {

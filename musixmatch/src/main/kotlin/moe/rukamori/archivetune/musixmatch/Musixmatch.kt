@@ -22,6 +22,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -32,17 +33,15 @@ import moe.rukamori.archivetune.musixmatch.models.ApiResponse
 import moe.rukamori.archivetune.musixmatch.models.LyricsBody
 import moe.rukamori.archivetune.musixmatch.models.MacroCalls
 import moe.rukamori.archivetune.musixmatch.models.MacroResponseBody
-import moe.rukamori.archivetune.musixmatch.models.MacroTarget
 import moe.rukamori.archivetune.musixmatch.models.MatcherBody
-import moe.rukamori.archivetune.musixmatch.models.ResolvedLyrics
 import moe.rukamori.archivetune.musixmatch.models.RichSyncBody
 import moe.rukamori.archivetune.musixmatch.models.SearchBody
-import moe.rukamori.archivetune.musixmatch.models.SearchCandidate
 import moe.rukamori.archivetune.musixmatch.models.SubtitleBody
 import moe.rukamori.archivetune.musixmatch.models.SubtitlesBody
 import moe.rukamori.archivetune.musixmatch.models.TokenBody
 import moe.rukamori.archivetune.musixmatch.models.Track
-import moe.rukamori.archivetune.musixmatch.models.errorLabel
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import moe.rukamori.archivetune.musixmatch.models.bodyAs
 import kotlin.math.abs
@@ -158,13 +157,12 @@ object Musixmatch {
         val response = client.get("${BASE_URL}track.search") {
             parameter("q_track", title)
             parameter("q_artist", artist)
-            parameter("q_artists", artist)
             parameter("page_size", SEARCH_PAGE_SIZE)
             parameter("f_has_lyrics", 1)
             parameter("app_id", APP_ID)
             parameter("usertoken", token)
         }
-        return decodeApiResponse(response, "search")
+        return decodeApiResponse(response, jsonFormat, "search")
     }
 
     internal suspend fun executeMacro(
@@ -196,43 +194,7 @@ object Musixmatch {
                 is MacroTarget.ById -> parameter("track_id", target.trackId)
             }
         }
-        return decodeApiResponse(response, "macro")
-    }
-
-    private suspend inline fun <reified T> decodeApiResponse(
-        response: io.ktor.client.statement.HttpResponse,
-        operation: String,
-    ): T {
-        if (response.status == HttpStatusCode.Unauthorized) throw MusixmatchError.TokenInvalid("HTTP 401 on $operation")
-        if (response.status == HttpStatusCode.TooManyRequests) throw MusixmatchError.RateLimited("HTTP 429 on $operation")
-        if (response.status.value >= 500) throw MusixmatchError.ServerError(response.status.value)
-        if (!response.status.isSuccess()) throw MusixmatchError.MalformedResponse("HTTP ${response.status.value} on $operation")
-
-        val bodyText = response.bodyAsText()
-        val apiResponse = runCatching { jsonFormat.decodeFromString<ApiResponse<T>>(bodyText) }
-            .getOrElse { throw MusixmatchError.MalformedResponse("Failed to parse $operation response") }
-        val statusCode = apiResponse.message?.header?.statusCode ?: 0
-        if (statusCode == 401) throw MusixmatchError.TokenInvalid("Status code 401 on $operation")
-        if (statusCode == 429) throw MusixmatchError.RateLimited("Status code 429 on $operation")
-        if (statusCode >= 500) throw MusixmatchError.ServerError(statusCode)
-        if (statusCode != 200) throw MusixmatchError.MalformedResponse("Status code $statusCode on $operation")
-        return apiResponse.message?.body ?: throw MusixmatchError.MalformedResponse("Empty $operation body")
-    }
-
-    private suspend inline fun <reified T> decodeStandaloneResponse(
-        response: io.ktor.client.statement.HttpResponse,
-        operation: String,
-    ): T? {
-        if (response.status == HttpStatusCode.Unauthorized) throw MusixmatchError.TokenInvalid("HTTP 401 on $operation")
-        if (response.status == HttpStatusCode.TooManyRequests) throw MusixmatchError.RateLimited("HTTP 429 on $operation")
-        if (!response.status.isSuccess()) return null
-        val bodyText = response.bodyAsText()
-        val apiResponse = runCatching { jsonFormat.decodeFromString<ApiResponse<T>>(bodyText) }.getOrNull() ?: return null
-        val status = apiResponse.message?.header?.statusCode
-        if (status == 401) throw MusixmatchError.TokenInvalid("Status code 401 on $operation")
-        if (status == 429) throw MusixmatchError.RateLimited("Status code 429 on $operation")
-        if (status != 200) return null
-        return apiResponse.message?.body
+        return decodeApiResponse(response, jsonFormat, "macro")
     }
 
     private suspend fun fetchRichSyncSeparately(
@@ -255,7 +217,7 @@ object Musixmatch {
                     parameter("q_duration", trackLength)
                     parameter("usertoken", token)
                 }
-            decodeStandaloneResponse<RichSyncBody>(response, "richsync")?.richsync?.richsyncBody
+            decodeStandaloneResponse<RichSyncBody>(response, jsonFormat, "richsync")?.richsync?.richsyncBody
         } catch (e: CancellationException) {
             throw e
         } catch (e: MusixmatchError.TokenInvalid) {
@@ -285,7 +247,7 @@ object Musixmatch {
                     if (trackLength > 0) parameter("f_subtitle_length", trackLength)
                     parameter("usertoken", token)
                 }
-            decodeStandaloneResponse<SubtitleBody>(response, "subtitle")?.subtitle?.subtitleBody
+            decodeStandaloneResponse<SubtitleBody>(response, jsonFormat, "subtitle")?.subtitle?.subtitleBody
         } catch (e: CancellationException) {
             throw e
         } catch (e: MusixmatchError.TokenInvalid) {
@@ -338,17 +300,19 @@ object Musixmatch {
         }
         if (track.isInstrumental) throw MusixmatchError.Instrumental()
 
-        val richsync = if (calls?.trackRichsyncGet?.message?.header?.statusCode == 200) {
+        val inlineRichsync = if (calls?.trackRichsyncGet?.message?.header?.statusCode == 200) {
             calls.trackRichsyncGet.bodyAs<RichSyncBody>(jsonFormat)?.richsync?.richsyncBody
-        } else if (track.isRichsyncAvailable) {
+        } else null
+        val richsync = inlineRichsync ?: if (track.isRichsyncAvailable) {
             tokenState.execute { token -> fetchRichSyncSeparately(track.commonTrackId, track.trackLength, token, contextLabel) }
         } else null
         lyricsFormat.tryTtml(richsync)?.let { return ResolvedLyrics(it, 2) }
 
-        val subtitle = if (calls?.trackSubtitlesGet?.message?.header?.statusCode == 200) {
+        val inlineSubtitle = if (calls?.trackSubtitlesGet?.message?.header?.statusCode == 200) {
             calls.trackSubtitlesGet.bodyAs<SubtitlesBody>(jsonFormat)
                 ?.subtitleList?.firstOrNull()?.subtitle?.subtitleBody
-        } else if (track.isSubtitlesAvailable) {
+        } else null
+        val subtitle = inlineSubtitle ?: if (track.isSubtitlesAvailable) {
             tokenState.execute { token -> fetchSubtitleSeparately(track.trackId, track.trackLength, token, contextLabel) }
         } else null
         lyricsFormat.tryLrc(subtitle)?.let { return ResolvedLyrics(it, 1) }
@@ -389,6 +353,8 @@ object Musixmatch {
                     logger?.invoke("Musixmatch playback: instrumental")
                     "♪ Instrumental ♪"
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 logger?.invoke("Musixmatch playback: failed (${errorLabel(e)})")
                 if (e is MusixmatchError.NoMatch || e is MusixmatchError.Mismatch) {
@@ -433,16 +399,21 @@ object Musixmatch {
         }
 
         val startedCount = AtomicInteger(0)
+        val queueStopped = AtomicBoolean(false)
+        val terminalErrors = ConcurrentLinkedQueue<Pair<Int, MusixmatchError>>()
         val semaphore = Semaphore(SEARCH_CONCURRENCY)
         val callbackMutex = Mutex()
         coroutineScope {
             val searchScope = this
-            candidates.forEachIndexed { index, candidate ->
+            val jobs = candidates.mapIndexed { index, candidate ->
                 launch {
                     val rank = index + 1
+                    if (terminalErrors.isNotEmpty()) return@launch
+
                     val lyrics = try {
                         semaphore.withPermit {
                             currentCoroutineContext().ensureActive()
+                            if (terminalErrors.isNotEmpty()) return@withPermit null
                             startedCount.incrementAndGet()
                             val res = resolveRequest(
                                 MacroTarget.ById(candidate.track.trackId, durationSeconds = durationSeconds),
@@ -460,11 +431,10 @@ object Musixmatch {
                     } catch (e: Exception) {
                         logger?.invoke("Musixmatch fan-out ranked $rank: failed (${errorLabel(e)})")
                         if (e is MusixmatchError.TokenInvalid || e is MusixmatchError.RateLimited) {
-                            if (startedCount.get() < candidates.size) {
+                            terminalErrors.add(rank to e)
+                            if (startedCount.get() < candidates.size && queueStopped.compareAndSet(false, true)) {
                                 logger?.invoke("Musixmatch fan-out: queue stopped — terminal (${errorLabel(e)}) at ranked $rank")
                             }
-                            logger?.invoke("Musixmatch fan-out: final terminal (${errorLabel(e)}) from ranked $rank")
-                            throw e
                         }
                         null
                     }
@@ -482,6 +452,13 @@ object Musixmatch {
                     }
                 }
             }
+            jobs.joinAll()
+        }
+
+        val bestTerminal = terminalErrors.minByOrNull { it.first }
+        if (bestTerminal != null) {
+            logger?.invoke("Musixmatch fan-out: final terminal (${errorLabel(bestTerminal.second)}) from ranked ${bestTerminal.first}")
+            throw bestTerminal.second
         }
     }
 }

@@ -26,24 +26,3 @@ data class MusixmatchHeader(
     @SerialName("execute_time") val executeTime: Double = 0.0,
 )
 
-sealed interface MacroTarget {
-    data class ByName(
-        val title: String,
-        val artist: String,
-        val album: String = "",
-        val durationSeconds: Int = -1,
-    ) : MacroTarget
-
-    data class ById(
-        val trackId: Long,
-        val title: String = "",
-        val artist: String = "",
-        val durationSeconds: Int = -1,
-    ) : MacroTarget
-}
-
-data class ResolvedLyrics(
-    val lyrics: String,
-    val quality: Int = 0,
-)
-

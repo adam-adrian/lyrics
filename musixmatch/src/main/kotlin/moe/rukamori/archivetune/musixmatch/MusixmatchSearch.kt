@@ -11,13 +11,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import moe.rukamori.archivetune.musixmatch.models.CandidateOutcome
-import moe.rukamori.archivetune.musixmatch.models.MacroTarget
-import moe.rukamori.archivetune.musixmatch.models.ResolvedLyrics
 import moe.rukamori.archivetune.musixmatch.models.SearchBody
-import moe.rukamori.archivetune.musixmatch.models.SearchCandidate
 import moe.rukamori.archivetune.musixmatch.models.Track
-import moe.rukamori.archivetune.musixmatch.models.errorLabel
 import kotlin.math.abs
 
 internal const val DURATION_TOLERANCE = 8
@@ -189,8 +184,9 @@ internal suspend fun Musixmatch.resolveSearchFallback(
                 if (isUnbeatable && remainingCandidates.isNotEmpty()) {
                     logger?.invoke("Musixmatch fallback: early-stop")
                     jobs.forEachIndexed { idx, job ->
-                        if (idx + 1 != bestSuccess.rank) {
-                            logger?.invoke("Musixmatch fallback ranked ${idx + 1}: cancelled (early-stop)")
+                        val rank = idx + 1
+                        if (rank != bestSuccess.rank && outcomes.none { it.rank == rank } && job.isActive) {
+                            logger?.invoke("Musixmatch fallback ranked $rank: cancelled (early-stop)")
                             job.cancel()
                         }
                     }
@@ -252,9 +248,6 @@ internal suspend fun Musixmatch.resolveTitleFallbackForSearch(
     logger?.invoke("Musixmatch title-fallback: failed (${errorLabel(e)})")
     throw e
 } catch (e: MusixmatchError) {
-    logger?.invoke("Musixmatch title-fallback: failed (${errorLabel(e)})")
-    null
-} catch (e: Exception) {
     logger?.invoke("Musixmatch title-fallback: failed (${errorLabel(e)})")
     null
 }

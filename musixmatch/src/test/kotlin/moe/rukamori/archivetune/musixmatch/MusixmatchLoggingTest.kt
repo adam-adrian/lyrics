@@ -238,4 +238,110 @@ class MusixmatchLoggingTest {
         assertTrue(logs.contains("Musixmatch fan-out: queue stopped — terminal (RateLimited) at ranked 1"))
         assertTrue(logs.contains("Musixmatch fan-out: final terminal (RateLimited) from ranked 1"))
     }
+
+    @Test
+    fun fanOutOneTerminalOneSuccess_successDeliveredAndTerminalThrown() = runBlocking {
+        Musixmatch.logger = { logs.add(it) }
+        val release1 = CompletableDeferred<Unit>()
+        Musixmatch.resetForTesting(MockEngine { request ->
+            when (request.url.encodedPath.substringAfterLast('/')) {
+                "track.search" -> respond(
+                    envelope("{\"track_list\":[{\"track\":${track(1)}},{\"track\":${track(2)}}]}"),
+                    headers = headers,
+                )
+                "macro.subtitles.get" -> {
+                    val id = request.url.parameters["track_id"]?.toLongOrNull()
+                    if (id == 1L) {
+                        release1.await()
+                        respond(status(429), headers = headers)
+                    } else {
+                        val resp = macro(id ?: 0)
+                        release1.complete(Unit)
+                        respond(resp, headers = headers)
+                    }
+                }
+                else -> error("Unexpected endpoint: ${request.url.encodedPath}")
+            }
+        })
+        Musixmatch.cachedToken = "test_token"
+
+        val lyricsList = mutableListOf<String>()
+        val result = runCatching {
+            Musixmatch.getAllLyrics("Song", "Artist", durationSeconds = 100, callback = lyricsList::add)
+        }
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is MusixmatchError.RateLimited)
+        assertEquals(1, lyricsList.size)
+
+        assertAllLogsMatchAllowlist()
+        assertTrue(logs.contains("Musixmatch fan-out ranked 2: success demerit=0 quality=1 rating=80"))
+        assertTrue(logs.contains("Musixmatch fan-out ranked 1: failed (RateLimited)"))
+        assertTrue(logs.contains("Musixmatch fan-out: final terminal (RateLimited) from ranked 1"))
+    }
+
+    @Test
+    fun playbackFallbackEarlyStop_invariantBExactOneOutcomePerRank() = runBlocking {
+        Musixmatch.logger = { logs.add(it) }
+        val release2 = CompletableDeferred<Unit>()
+        Musixmatch.resetForTesting(MockEngine { request ->
+            when (request.url.encodedPath.substringAfterLast('/')) {
+                "track.search" -> respond(
+                    envelope("{\"track_list\":[{\"track\":${track(1)}},{\"track\":${track(2)}}]}"),
+                    headers = headers,
+                )
+                "macro.subtitles.get" -> {
+                    val id = request.url.parameters["track_id"]?.toLongOrNull()
+                    if (id == null) respond(macro(matcherStatus = 404), headers = headers)
+                    else if (id == 1L) respond(macro(1, hasRichsync = true), headers = headers)
+                    else {
+                        release2.await()
+                        respond(macro(2), headers = headers)
+                    }
+                }
+                else -> error("Unexpected endpoint: ${request.url.encodedPath}")
+            }
+        })
+        Musixmatch.cachedToken = "test_token"
+
+        val result = Musixmatch.getLyrics("Song", "Artist", durationSeconds = 100)
+        release2.complete(Unit)
+        assertTrue(result.isSuccess)
+
+        assertAllLogsMatchAllowlist()
+        val rank1Outcomes = logs.count { it.startsWith("Musixmatch fallback ranked 1: ") }
+        val rank2Outcomes = logs.count { it.startsWith("Musixmatch fallback ranked 2: ") }
+        assertEquals(1, rank1Outcomes)
+        assertEquals(1, rank2Outcomes)
+        assertTrue(logs.contains("Musixmatch fallback ranked 1: success demerit=0 quality=2 rating=80"))
+        assertTrue(logs.contains("Musixmatch fallback ranked 2: cancelled (early-stop)"))
+    }
+
+    @Test
+    fun playbackFallbackRank2WinsOnQuality_winnerLogged() = runBlocking {
+        Musixmatch.logger = { logs.add(it) }
+        Musixmatch.resetForTesting(MockEngine { request ->
+            when (request.url.encodedPath.substringAfterLast('/')) {
+                "track.search" -> respond(
+                    envelope("{\"track_list\":[{\"track\":${track(1)}},{\"track\":${track(2)}}]}"),
+                    headers = headers,
+                )
+                "macro.subtitles.get" -> {
+                    val id = request.url.parameters["track_id"]?.toLongOrNull()
+                    if (id == null) respond(macro(matcherStatus = 404), headers = headers)
+                    else if (id == 1L) respond(macro(1, hasRichsync = false), headers = headers)
+                    else respond(macro(2, hasRichsync = true), headers = headers)
+                }
+                else -> error("Unexpected endpoint: ${request.url.encodedPath}")
+            }
+        })
+        Musixmatch.cachedToken = "test_token"
+
+        val result = Musixmatch.getLyrics("Song", "Artist", durationSeconds = 100)
+        assertTrue(result.isSuccess)
+
+        assertAllLogsMatchAllowlist()
+        assertTrue(logs.contains("Musixmatch fallback ranked 1: success demerit=0 quality=1 rating=80"))
+        assertTrue(logs.contains("Musixmatch fallback ranked 2: success demerit=0 quality=2 rating=80"))
+        assertTrue(logs.contains("Musixmatch fallback: winner from ranked 2"))
+    }
 }

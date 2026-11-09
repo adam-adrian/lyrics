@@ -150,6 +150,15 @@ class MusixmatchSubtitleSearchTest {
         assertEquals(1, requests.count { it.encodedPath.endsWith("token.get") })
     }
 
+    @Test
+    fun inline200WithEmptyBodyFallsBackToStandaloneSubtitle() = runBlocking {
+        setup(subtitleAvailable = true, inlineSubtitle = "[]")
+        val lyrics = search()
+        assertEquals(1, lyrics.size)
+        assertTrue(lyrics.first().contains("Separate subtitle winner"))
+        assertEquals(1, subtitleRequests().size)
+    }
+
     private fun quote(value: String) = Json.encodeToString(value)
     private fun track(id: Int, sub: Boolean): String =
         """{"track_id":$id,"commontrack_id":${id + 1000},"track_name":"Song","artist_name":"Artist","track_length":100,"has_richsync":0,"has_subtitles":${if (sub) 1 else 0}}"""
