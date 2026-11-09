@@ -133,14 +133,11 @@ internal suspend fun Musixmatch.resolveSearchFallback(
     if (candidates.isEmpty()) throw MusixmatchError.NoMatch("Search fallback returned no usable lyrics")
 
     val outcomes = mutableListOf<CandidateOutcome>()
-    val terminalError = java.util.concurrent.atomic.AtomicReference<MusixmatchError?>(null)
     coroutineScope {
         val channel = Channel<CandidateOutcome>(candidates.size)
-        lateinit var jobs: List<kotlinx.coroutines.Job>
-        jobs = candidates.mapIndexed { index, candidate ->
+        val jobs = candidates.mapIndexed { index, candidate ->
             val rank = index + 1
             launch {
-                if (terminalError.get() != null) return@launch
                 val outcome = try {
                     val resolved = resolveRequest(
                         MacroTarget.ById(candidate.track.trackId, title, artist, durationSeconds),
@@ -159,8 +156,6 @@ internal suspend fun Musixmatch.resolveSearchFallback(
                     CandidateOutcome.TerminalFailure(candidate, rank, e)
                 } catch (e: MusixmatchError.RateLimited) {
                     logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
-                    terminalError.set(e)
-                    jobs.forEachIndexed { idx, j -> if (idx != index) j.cancel() }
                     CandidateOutcome.TerminalFailure(candidate, rank, e)
                 } catch (e: Exception) {
                     logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
@@ -171,7 +166,7 @@ internal suspend fun Musixmatch.resolveSearchFallback(
         }
 
         for (i in candidates.indices) {
-            val outcome = channel.receiveCatching().getOrNull() ?: break
+            val outcome = channel.receive()
             outcomes.add(outcome)
 
             val successes = outcomes.filterIsInstance<CandidateOutcome.Success>()
@@ -189,17 +184,13 @@ internal suspend fun Musixmatch.resolveSearchFallback(
                 if (isUnbeatable && remainingCandidates.isNotEmpty()) {
                     logger?.invoke("Musixmatch fallback: early-stop")
                     jobs.forEachIndexed { idx, job ->
-                        val rank = idx + 1
-                        if (rank != bestSuccess.rank && outcomes.none { it.rank == rank } && job.isActive) {
-                            logger?.invoke("Musixmatch fallback ranked $rank: cancelled (early-stop)")
+                        if (idx + 1 != bestSuccess.rank) {
+                            logger?.invoke("Musixmatch fallback ranked ${idx + 1}: cancelled (early-stop)")
                             job.cancel()
                         }
                     }
                     break
                 }
-            }
-            if (terminalError.get() != null && successes.isEmpty()) {
-                break
             }
         }
     }
