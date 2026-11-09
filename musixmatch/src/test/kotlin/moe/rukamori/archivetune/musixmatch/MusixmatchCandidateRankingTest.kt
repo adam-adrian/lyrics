@@ -6,12 +6,16 @@
  */
 package moe.rukamori.archivetune.musixmatch
 
+import moe.rukamori.archivetune.musixmatch.models.CandidateOutcome
+import moe.rukamori.archivetune.musixmatch.models.ResolvedLyrics
 import moe.rukamori.archivetune.musixmatch.models.SearchBody
+import moe.rukamori.archivetune.musixmatch.models.SearchCandidate
 import moe.rukamori.archivetune.musixmatch.models.SearchTrackItem
 import moe.rukamori.archivetune.musixmatch.models.Track
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MusixmatchCandidateRankingTest {
@@ -100,5 +104,48 @@ class MusixmatchCandidateRankingTest {
         assertEquals(0, candidates[0].demerit)
         assertEquals(1L, candidates[1].track.trackId)
         assertEquals(1, candidates[1].demerit)
+    }
+
+    @Test
+    fun versionMatchBeatsHigherQualityMismatchedVersion() {
+        // Demerit 0 plain (quality 0) beats Demerit 1 richsync (quality 2)
+        val studio = CandidateOutcome.Success(SearchCandidate(track(1, "Dynamite", rating = 95), 0), 1, ResolvedLyrics("plain", 0))
+        val live = CandidateOutcome.Success(SearchCandidate(track(2, "Dynamite - Live", rating = 88), 1), 2, ResolvedLyrics("richsync", 2))
+        val sorted = listOf(live, studio).sortedWith(FALLBACK_SUCCESS_COMPARATOR)
+        assertEquals(1L, sorted.first().candidate.track.trackId)
+    }
+
+    @Test
+    fun higherQualityWinsWhenDemeritIsEqual() {
+        val plain = CandidateOutcome.Success(SearchCandidate(track(1, "Song", rating = 90), 0), 1, ResolvedLyrics("plain", 0))
+        val ttml = CandidateOutcome.Success(SearchCandidate(track(2, "Song", rating = 80), 0), 2, ResolvedLyrics("ttml", 2))
+        val sorted = listOf(plain, ttml).sortedWith(FALLBACK_SUCCESS_COMPARATOR)
+        assertEquals(2L, sorted.first().candidate.track.trackId)
+    }
+
+    @Test
+    fun ratingBreaksTieWhenDemeritAndQualityAreEqual() {
+        val lowerRated = CandidateOutcome.Success(SearchCandidate(track(1, "Song", rating = 70), 0), 1, ResolvedLyrics("ttml", 2))
+        val higherRated = CandidateOutcome.Success(SearchCandidate(track(2, "Song", rating = 95), 0), 2, ResolvedLyrics("ttml", 2))
+        val sorted = listOf(lowerRated, higherRated).sortedWith(FALLBACK_SUCCESS_COMPARATOR)
+        assertEquals(2L, sorted.first().candidate.track.trackId)
+    }
+
+    @Test
+    fun earlierRankBreaksTieWhenDemeritQualityAndRatingAreEqual() {
+        val rank1 = CandidateOutcome.Success(SearchCandidate(track(1, "Song", rating = 80), 0), 1, ResolvedLyrics("ttml", 2))
+        val rank2 = CandidateOutcome.Success(SearchCandidate(track(2, "Song", rating = 80), 0), 2, ResolvedLyrics("ttml", 2))
+        val sorted = listOf(rank2, rank1).sortedWith(FALLBACK_SUCCESS_COMPARATOR)
+        assertEquals(1L, sorted.first().candidate.track.trackId)
+        assertEquals(1, sorted.first().rank)
+    }
+
+    @Test
+    fun rank1Quality1CannotEarlyStopIfSameDemeritRemains() {
+        val rank1 = CandidateOutcome.Success(SearchCandidate(track(1, "Song", rating = 80), 0), 1, ResolvedLyrics("lrc", 1))
+        val rank2 = SearchCandidate(track(2, "Song", rating = 80), 0)
+        val maxPossibleRank2 = CandidateOutcome.Success(rank2, 2, ResolvedLyrics("ttml", 2))
+        // rank 1 with quality 1 is worse than maxPossibleRank2 with quality 2, so cannot early stop
+        assertTrue(FALLBACK_SUCCESS_COMPARATOR.compare(rank1, maxPossibleRank2) > 0)
     }
 }

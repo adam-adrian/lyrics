@@ -30,13 +30,15 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.Json
 import moe.rukamori.archivetune.musixmatch.models.ApiResponse
 import moe.rukamori.archivetune.musixmatch.models.LyricsBody
-import moe.rukamori.archivetune.musixmatch.models.MacroResponseBody
+import moe.rukamori.archivetune.musixmatch.models.CandidateOutcome
 import moe.rukamori.archivetune.musixmatch.models.MacroCalls
+import moe.rukamori.archivetune.musixmatch.models.MacroResponseBody
 import moe.rukamori.archivetune.musixmatch.models.MacroTarget
 import moe.rukamori.archivetune.musixmatch.models.MatcherBody
 import moe.rukamori.archivetune.musixmatch.models.ResolvedLyrics
 import moe.rukamori.archivetune.musixmatch.models.RichSyncBody
 import moe.rukamori.archivetune.musixmatch.models.SearchBody
+import moe.rukamori.archivetune.musixmatch.models.SearchCandidate
 import moe.rukamori.archivetune.musixmatch.models.SubtitleBody
 import moe.rukamori.archivetune.musixmatch.models.SubtitlesBody
 import moe.rukamori.archivetune.musixmatch.models.TokenBody
@@ -420,34 +422,50 @@ object Musixmatch {
 
         val semaphore = Semaphore(SEARCH_CONCURRENCY)
         val callbackMutex = Mutex()
+        val outcomes = mutableListOf<CandidateOutcome>()
+        val outcomesMutex = Mutex()
+        var terminalOccurred = false
+
         coroutineScope {
             val searchScope = this
-            candidates.forEach { candidate ->
+            candidates.forEachIndexed { index, candidate ->
                 launch {
-                    val lyrics = try {
+                    val rank = index + 1
+                    val outcome = try {
                         semaphore.withPermit {
                             currentCoroutineContext().ensureActive()
-                            resolveRequest(
+                            val shouldAbort = outcomesMutex.withLock { terminalOccurred }
+                            if (shouldAbort) return@launch
+                            val resolved = resolveRequest(
                                 MacroTarget.ById(candidate.track.trackId, durationSeconds = durationSeconds),
                                 tokenState,
-                            ).lyrics
+                            )
+                            CandidateOutcome.Success(candidate, rank, resolved)
                         }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: MusixmatchError.TokenInvalid) {
-                        throw e
+                        CandidateOutcome.TerminalFailure(candidate, rank, e)
                     } catch (e: MusixmatchError.RateLimited) {
-                        throw e
+                        CandidateOutcome.TerminalFailure(candidate, rank, e)
                     } catch (e: Exception) {
                         logger?.invoke("Musixmatch candidate skipped")
-                        null
+                        CandidateOutcome.LocalFailure(candidate, rank, e)
                     }
-                    if (lyrics != null) {
+
+                    outcomesMutex.withLock {
+                        outcomes.add(outcome)
+                        if (outcome is CandidateOutcome.TerminalFailure) {
+                            terminalOccurred = true
+                        }
+                    }
+
+                    if (outcome is CandidateOutcome.Success) {
                         currentCoroutineContext().ensureActive()
                         callbackMutex.withLock {
                             currentCoroutineContext().ensureActive()
                             try {
-                                callback(lyrics)
+                                callback(outcome.lyrics.lyrics)
                             } catch (e: CancellationException) {
                                 searchScope.cancel(e)
                                 throw e
@@ -456,6 +474,11 @@ object Musixmatch {
                     }
                 }
             }
+        }
+
+        val terminals = outcomes.filterIsInstance<CandidateOutcome.TerminalFailure>()
+        if (terminals.isNotEmpty()) {
+            throw terminals.minByOrNull { it.rank }!!.error
         }
     }
 }

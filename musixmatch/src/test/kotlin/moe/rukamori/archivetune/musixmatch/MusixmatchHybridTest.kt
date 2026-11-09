@@ -169,9 +169,9 @@ class MusixmatchHybridTest {
     }
 
     @Test
-    fun fallbackPlaybackReturnsLastCandidateError() = runBlocking {
+    fun fallbackPlaybackReturnsBestRankedCandidateError() = runBlocking {
         setup(tracks = listOf(track(2), track(3)), titleMacro = macro(matcherStatus = 404), idMacros = mapOf(2L to macro(2, restricted = true), 3L to macro(99)))
-        assertTrue(playback().exceptionOrNull() is MusixmatchError.Mismatch)
+        assertTrue(playback().exceptionOrNull() is MusixmatchError.Restricted)
     }
 
     @Test
