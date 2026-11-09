@@ -13,7 +13,6 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.yield
 import moe.rukamori.archivetune.musixmatch.models.SearchBody
 import moe.rukamori.archivetune.musixmatch.models.Track
 import kotlin.math.abs
@@ -137,12 +136,11 @@ internal suspend fun Musixmatch.resolveSearchFallback(
 
     val outcomes = mutableListOf<CandidateOutcome>()
     coroutineScope {
-        val channel = Channel<CandidateOutcome>(candidates.size)
+        val channel = Channel<CandidateOutcome>()
         lateinit var jobs: List<Job>
         jobs = candidates.mapIndexed { index, candidate ->
             val rank = index + 1
             launch {
-                if (index > 0) yield()
                 val outcome = try {
                     val resolved = resolveRequest(
                         MacroTarget.ById(candidate.track.trackId, title, artist, durationSeconds),
