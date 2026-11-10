@@ -13,6 +13,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.Url
 import io.ktor.http.headersOf
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -195,14 +196,56 @@ class MusixmatchHybridTest {
 
     @Test
     fun fallbackRateLimitYieldsToConcurrentSuccessfulCandidate() = runBlocking {
-        setup(tracks = listOf(track(2), track(3)), titleMacro = macro(matcherStatus = 404), idStatuses = mapOf(2L to 429))
+        val candidate3Entered = CompletableDeferred<Unit>()
+        requests.clear()
+        Musixmatch.resetForTesting(MockEngine { request ->
+            requests.add(request.url)
+            when (request.url.encodedPath.substringAfterLast('/')) {
+                "track.search" -> respond(envelope("{\"track_list\":[${listOf(track(2), track(3)).joinToString(",") { "{\"track\":$it}" }}]}"), headers = headers)
+                "macro.subtitles.get" -> {
+                    val id = request.url.parameters["track_id"]?.toLongOrNull()
+                    if (id == null) {
+                        respond(macro(matcherStatus = 404), headers = headers)
+                    } else if (id == 2L) {
+                        candidate3Entered.await()
+                        respond(macro(2L), HttpStatusCode.TooManyRequests, headers)
+                    } else {
+                        candidate3Entered.complete(Unit)
+                        respond(macro(3L), headers = headers)
+                    }
+                }
+                else -> error("Unexpected endpoint: ${request.url.encodedPath}")
+            }
+        })
+        Musixmatch.cachedToken = "cached_test_token"
         assertEquals("Lyrics 3", playback().getOrThrow())
         assertEquals(listOf(2L, 3L), ids())
     }
 
     @Test
     fun fallbackAllCandidatesTerminalReturnsBestRankedTerminal() = runBlocking {
-        setup(tracks = listOf(track(2), track(3)), titleMacro = macro(matcherStatus = 404), idStatuses = mapOf(2L to 429, 3L to 429))
+        val candidate3Entered = CompletableDeferred<Unit>()
+        requests.clear()
+        Musixmatch.resetForTesting(MockEngine { request ->
+            requests.add(request.url)
+            when (request.url.encodedPath.substringAfterLast('/')) {
+                "track.search" -> respond(envelope("{\"track_list\":[${listOf(track(2), track(3)).joinToString(",") { "{\"track\":$it}" }}]}"), headers = headers)
+                "macro.subtitles.get" -> {
+                    val id = request.url.parameters["track_id"]?.toLongOrNull()
+                    if (id == null) {
+                        respond(macro(matcherStatus = 404), headers = headers)
+                    } else if (id == 2L) {
+                        candidate3Entered.await()
+                        respond(macro(2L), HttpStatusCode.TooManyRequests, headers)
+                    } else {
+                        candidate3Entered.complete(Unit)
+                        respond(macro(3L), HttpStatusCode.TooManyRequests, headers)
+                    }
+                }
+                else -> error("Unexpected endpoint: ${request.url.encodedPath}")
+            }
+        })
+        Musixmatch.cachedToken = "cached_test_token"
         val failure = playback().exceptionOrNull()
         assertTrue(failure is MusixmatchError.RateLimited)
         assertEquals(listOf(2L, 3L), ids())
