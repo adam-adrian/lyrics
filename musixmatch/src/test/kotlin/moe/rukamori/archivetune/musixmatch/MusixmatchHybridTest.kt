@@ -194,15 +194,8 @@ class MusixmatchHybridTest {
     }
 
     @Test
-    fun fallbackRateLimitedCandidateYieldsToConcurrentSuccessfulCandidate() = runBlocking {
+    fun fallbackRateLimitStopsBeforeSecondCandidate() = runBlocking {
         setup(tracks = listOf(track(2), track(3)), titleMacro = macro(matcherStatus = 404), idStatuses = mapOf(2L to 429))
-        assertEquals("Lyrics 3", playback().getOrThrow())
-        assertEquals(listOf(2L, 3L), ids())
-    }
-
-    @Test
-    fun fallbackRateLimitWhenAllCandidatesFailReturnsRateLimited() = runBlocking {
-        setup(tracks = listOf(track(2), track(3)), titleMacro = macro(matcherStatus = 404), idStatuses = mapOf(2L to 429, 3L to 429))
         val failure = playback().exceptionOrNull()
         assertTrue(failure is MusixmatchError.RateLimited)
         assertEquals(listOf(2L), ids())
