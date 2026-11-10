@@ -138,10 +138,11 @@ internal suspend fun Musixmatch.resolveSearchFallback(
     coroutineScope {
         val channel = Channel<CandidateOutcome>()
         val loggedOutcome = Array(candidates.size) { AtomicBoolean(false) }
-        lateinit var jobs: List<Job>
-        jobs = candidates.mapIndexed { index, candidate ->
+        val jobs = mutableListOf<Job>()
+        for (index in candidates.indices) {
+            val candidate = candidates[index]
             val rank = index + 1
-            launch {
+            val job = launch {
                 val outcome = try {
                     val resolved = resolveRequest(
                         MacroTarget.ById(candidate.track.trackId, title, artist, durationSeconds),
@@ -168,9 +169,7 @@ internal suspend fun Musixmatch.resolveSearchFallback(
                     if (loggedOutcome[index].compareAndSet(false, true)) {
                         logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
                     }
-                    if (::jobs.isInitialized) {
-                        jobs.forEachIndexed { idx, j -> if (idx + 1 > rank) j.cancel() }
-                    }
+                    jobs.forEachIndexed { idx, j -> if (idx + 1 > rank) j.cancel() }
                     CandidateOutcome.TerminalFailure(candidate, rank, e)
                 } catch (e: Exception) {
                     if (loggedOutcome[index].compareAndSet(false, true)) {
@@ -180,6 +179,7 @@ internal suspend fun Musixmatch.resolveSearchFallback(
                 }
                 channel.send(outcome)
             }
+            jobs.add(job)
         }
         launch {
             jobs.joinAll()
