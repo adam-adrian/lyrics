@@ -520,6 +520,7 @@ class MusixmatchSearchConcurrencyTest {
         try {
             assertEquals(setOf(1, 2), setOf(entered.receive(), entered.receive()))
             releaseUnauthorized.complete(Unit)
+            assertEquals(1, entered.receive())
             releaseSibling.complete(Unit)
             assertTrue(failure { operation.await() } is MusixmatchError.TokenInvalid)
             assertEquals(1, renewals.get())
