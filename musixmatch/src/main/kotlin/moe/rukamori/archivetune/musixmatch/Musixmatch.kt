@@ -463,6 +463,7 @@ object Musixmatch {
                 jobs.joinAll()
             }
         } catch (e: CancellationException) {
+            currentCoroutineContext().ensureActive()
             val bestTerminal = terminalErrors.minByOrNull { it.first }
             if (bestTerminal == null) throw e
         }
