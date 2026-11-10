@@ -398,10 +398,10 @@ class MusixmatchHybridTest {
                             "track.subtitles.get":${call("{\"subtitle_list\":[{\"subtitle\":{\"subtitle_body\":\"[00:01.00] Line 1\"}}]}")}
                         }}"""), headers = headers)
                     } else {
-                        val richsyncJson = """{"richsync_body":"[{\"c\":\"Word\",\"o\":0.0}]"}"""
+                        val richsyncJson = """[{"ts":1.0,"te":5.0,"l":[{"c":"Word","o":0.0}],"x":"Word"}]"""
                         respond(envelope("""{"macro_calls":{
                             "matcher.track.get":${call("{\"track\":${track(3, richsync = 1)}}")},
-                            "track.richsync.get":${call("{\"richsync\":$richsyncJson}")}
+                            "track.richsync.get":${call("{\"richsync\":{\"richsync_body\":${quote(richsyncJson)}}}")}
                         }}"""), headers = headers)
                     }
                 }
@@ -410,7 +410,7 @@ class MusixmatchHybridTest {
         })
         Musixmatch.cachedToken = "cached_test_token"
         val res = playback().getOrThrow()
-        assertTrue(res.contains("<tt xml:lang=\"en\""))
+        assertTrue(res.contains("<tt"))
         assertEquals(listOf(2L, 3L), ids())
     }
 

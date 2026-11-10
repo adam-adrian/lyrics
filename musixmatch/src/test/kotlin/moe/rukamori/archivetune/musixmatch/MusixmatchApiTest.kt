@@ -292,7 +292,7 @@ class MusixmatchApiTest {
                             respond("Unauthorized", HttpStatusCode.Unauthorized, jsonHeaders)
                         } else {
                             respond(
-                                jsonMacroResponse(lyricsBodyText = "Recovered plain lyrics"),
+                                jsonMacroResponse(lyricsBodyText = "Recovered plain lyrics", hasRichsync = 0, hasSubtitles = 0),
                                 HttpStatusCode.OK,
                                 jsonHeaders,
                             )
