@@ -395,11 +395,24 @@ object Musixmatch {
         logSearchFunnel("fan-out", searchBody, durationSeconds, candidates.size)
 
         if (candidates.isEmpty()) {
-            resolveTitleFallbackForSearch(tokenState, cleanTitle, cleanArtist, album?.trim().orEmpty(), durationSeconds)
-                ?.let { lyrics ->
-                    currentCoroutineContext().ensureActive()
-                    callback(lyrics)
-                }
+            try {
+                logger?.invoke("Musixmatch title-fallback: title matcher")
+                val res = resolveRequest(
+                    MacroTarget.ByName(cleanTitle, cleanArtist, album?.trim().orEmpty(), durationSeconds),
+                    tokenState,
+                    "title-fallback",
+                )
+                logger?.invoke("Musixmatch title-fallback: success quality=${res.quality}")
+                currentCoroutineContext().ensureActive()
+                callback(res.lyrics)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: MusixmatchError.Instrumental) {
+                logger?.invoke("Musixmatch title-fallback: instrumental")
+            } catch (e: MusixmatchError) {
+                logger?.invoke("Musixmatch title-fallback: failed (${errorLabel(e)})")
+                if (e is MusixmatchError.TokenInvalid || e is MusixmatchError.RateLimited) throw e
+            }
             return
         }
 

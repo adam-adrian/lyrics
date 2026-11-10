@@ -242,34 +242,3 @@ internal suspend fun Musixmatch.resolveSearchFallback(
 
     throw MusixmatchError.NoMatch("Search fallback returned no usable lyrics")
 }
-
-internal suspend fun Musixmatch.resolveTitleFallbackForSearch(
-    tokenState: SearchTokenState,
-    title: String,
-    artist: String,
-    album: String,
-    durationSeconds: Int,
-): String? = try {
-    logger?.invoke("Musixmatch title-fallback: title matcher")
-    val res = resolveRequest(
-        MacroTarget.ByName(title, artist, album, durationSeconds),
-        tokenState,
-        "title-fallback",
-    )
-    logger?.invoke("Musixmatch title-fallback: success quality=${res.quality}")
-    res.lyrics
-} catch (e: CancellationException) {
-    throw e
-} catch (e: MusixmatchError.Instrumental) {
-    logger?.invoke("Musixmatch title-fallback: instrumental")
-    null
-} catch (e: MusixmatchError.TokenInvalid) {
-    logger?.invoke("Musixmatch title-fallback: failed (${errorLabel(e)})")
-    throw e
-} catch (e: MusixmatchError.RateLimited) {
-    logger?.invoke("Musixmatch title-fallback: failed (${errorLabel(e)})")
-    throw e
-} catch (e: MusixmatchError) {
-    logger?.invoke("Musixmatch title-fallback: failed (${errorLabel(e)})")
-    null
-}

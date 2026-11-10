@@ -23,6 +23,5 @@ data class ApiMessage<T>(
 @Serializable
 data class MusixmatchHeader(
     @SerialName("status_code") val statusCode: Int = 0,
-    @SerialName("execute_time") val executeTime: Double = 0.0,
 )
 

@@ -71,42 +71,41 @@ internal suspend inline fun <reified T> decodeApiResponse(
     response: HttpResponse,
     jsonFormat: Json,
     operation: String,
-): T {
-    if (response.status == HttpStatusCode.Unauthorized) throw MusixmatchError.TokenInvalid("HTTP 401 on $operation")
-    if (response.status == HttpStatusCode.TooManyRequests) throw MusixmatchError.RateLimited("HTTP 429 on $operation")
-    if (response.status.value >= 500) throw MusixmatchError.ServerError(response.status.value)
-    if (!response.status.isSuccess()) throw MusixmatchError.MalformedResponse("HTTP ${response.status.value} on $operation")
+): T = decodeResponse<T>(response, jsonFormat, operation, lenient = false)!!
 
-    val bodyText = response.bodyAsText()
-    val apiResponse = runCatching { jsonFormat.decodeFromString<ApiResponse<T>>(bodyText) }
-        .getOrElse { throw MusixmatchError.MalformedResponse("Failed to parse $operation response") }
-    val statusCode = apiResponse.message?.header?.statusCode ?: 0
-    if (statusCode == 401) throw MusixmatchError.TokenInvalid("Status code 401 on $operation")
-    if (statusCode == 429) throw MusixmatchError.RateLimited("Status code 429 on $operation")
-    if (statusCode >= 500) throw MusixmatchError.ServerError(statusCode)
-    if (statusCode != 200) throw MusixmatchError.MalformedResponse("Status code $statusCode on $operation")
-    return apiResponse.message?.body ?: throw MusixmatchError.MalformedResponse("Empty $operation body")
-}
-
-/**
- * Decodes standalone responses (track.richsync.get, track.subtitle.get).
- * Unlike primary API calls where 5xx throws [MusixmatchError.ServerError], standalone calls are optional
- * enrichment formats where server errors (5xx) or missing bodies return null, allowing fallback to
- * alternative formats (subtitles or plain lyrics) to proceed, as locked by ordinaryStandaloneFailureKeepsOtherCandidates.
- */
 internal suspend inline fun <reified T> decodeStandaloneResponse(
     response: HttpResponse,
     jsonFormat: Json,
     operation: String,
+): T? = decodeResponse<T>(response, jsonFormat, operation, lenient = true)
+
+internal suspend inline fun <reified T> decodeResponse(
+    response: HttpResponse,
+    jsonFormat: Json,
+    operation: String,
+    lenient: Boolean,
 ): T? {
     if (response.status == HttpStatusCode.Unauthorized) throw MusixmatchError.TokenInvalid("HTTP 401 on $operation")
     if (response.status == HttpStatusCode.TooManyRequests) throw MusixmatchError.RateLimited("HTTP 429 on $operation")
-    if (!response.status.isSuccess()) return null
+    if (!response.status.isSuccess()) {
+        if (lenient) return null
+        if (response.status.value >= 500) throw MusixmatchError.ServerError(response.status.value)
+        throw MusixmatchError.MalformedResponse("HTTP ${response.status.value} on $operation")
+    }
+
     val bodyText = response.bodyAsText()
-    val apiResponse = runCatching { jsonFormat.decodeFromString<ApiResponse<T>>(bodyText) }.getOrNull() ?: return null
-    val status = apiResponse.message?.header?.statusCode
-    if (status == 401) throw MusixmatchError.TokenInvalid("Status code 401 on $operation")
-    if (status == 429) throw MusixmatchError.RateLimited("Status code 429 on $operation")
-    if (status != 200) return null
-    return apiResponse.message?.body
+    val apiResponse = runCatching { jsonFormat.decodeFromString<ApiResponse<T>>(bodyText) }
+        .getOrElse {
+            if (lenient) return null
+            throw MusixmatchError.MalformedResponse("Failed to parse $operation response")
+        }
+    val statusCode = apiResponse.message?.header?.statusCode ?: 0
+    if (statusCode == 401) throw MusixmatchError.TokenInvalid("Status code 401 on $operation")
+    if (statusCode == 429) throw MusixmatchError.RateLimited("Status code 429 on $operation")
+    if (statusCode != 200) {
+        if (lenient) return null
+        if (statusCode >= 500) throw MusixmatchError.ServerError(statusCode)
+        throw MusixmatchError.MalformedResponse("Status code $statusCode on $operation")
+    }
+    return apiResponse.message?.body ?: if (lenient) null else throw MusixmatchError.MalformedResponse("Empty $operation body")
 }
