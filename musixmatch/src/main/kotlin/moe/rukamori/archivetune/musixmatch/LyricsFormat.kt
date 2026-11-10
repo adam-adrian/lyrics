@@ -12,7 +12,11 @@ import moe.rukamori.archivetune.musixmatch.models.SubtitleLine
 import java.util.Locale
 
 internal class LyricsFormat(private val jsonFormat: Json) {
-    private val licenseFooterRegex = Regex("""the(?:se|is) lyrics (?:is|are) not for commercial use""", RegexOption.IGNORE_CASE)
+    private val LICENSE_FOOTER_PATTERNS =
+        listOf(
+            "this lyrics is not for commercial use",
+            "these lyrics are not for commercial use",
+        )
 
     private val lrcTimestampRegex = Regex("""\[\d{1,2}:\d{2}([.:]\d{1,3})?\]""")
 
@@ -58,9 +62,13 @@ internal class LyricsFormat(private val jsonFormat: Json) {
                 }.takeIf { it.isNotBlank() }
         }.getOrNull()
 
-    private fun cleanPlainLyrics(rawBody: String): String =
-        rawBody.lines()
-            .filterNot { licenseFooterRegex.containsMatchIn(it) }
-            .joinToString("\n")
-            .trim()
+    private fun cleanPlainLyrics(rawBody: String): String {
+        val lines = rawBody.lines()
+        val filtered =
+            lines.filterNot { line ->
+                val lower = line.lowercase()
+                LICENSE_FOOTER_PATTERNS.any { lower.contains(it) }
+            }
+        return filtered.joinToString("\n").trim()
+    }
 }
