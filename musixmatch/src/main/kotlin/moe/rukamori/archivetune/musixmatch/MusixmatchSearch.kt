@@ -145,7 +145,6 @@ internal suspend fun Musixmatch.resolveSearchFallback(
             val candidate = candidates[index]
             val rank = index + 1
             val job = launch {
-                if (index > 0) delay(10)
                 val outcome = try {
                     val resolved = resolveRequest(
                         MacroTarget.ById(candidate.track.trackId, title, artist, durationSeconds),
@@ -172,7 +171,6 @@ internal suspend fun Musixmatch.resolveSearchFallback(
                     if (loggedOutcome[index].compareAndSet(false, true)) {
                         logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
                     }
-                    jobs.forEachIndexed { idx, j -> if (idx + 1 > rank) j.cancel() }
                     CandidateOutcome.TerminalFailure(candidate, rank, e)
                 } catch (e: Exception) {
                     if (loggedOutcome[index].compareAndSet(false, true)) {

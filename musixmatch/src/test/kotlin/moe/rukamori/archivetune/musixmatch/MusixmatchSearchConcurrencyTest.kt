@@ -378,12 +378,13 @@ class MusixmatchSearchConcurrencyTest {
         try {
             assertEquals(setOf(1, 2), setOf(entered.receive(), entered.receive()))
             releaseUnauthorized.complete(Unit)
+            releaseSibling.complete(Unit)
             assertTrue(failure { operation.await() } is MusixmatchError.TokenInvalid)
             assertEquals(listOf(oldToken, newToken), searchTokens.toList())
             assertEquals(1, renewals.get())
             assertEquals(setOf(1 to newToken, 2 to newToken), macroRequests.toSet())
             assertEquals(2, macroRequests.size)
-            assertTrue(emitted.isEmpty())
+            assertEquals(listOf("Candidate 2"), emitted.toList())
         } finally {
             cleanup(operation, releaseUnauthorized, releaseSibling)
             entered.close()
@@ -425,9 +426,10 @@ class MusixmatchSearchConcurrencyTest {
         try {
             assertEquals(setOf(1, 2), setOf(entered.receive(), entered.receive()))
             rejectFirst.complete(Unit)
+            releaseSibling.complete(Unit)
             assertTrue(failure { operation.await() } is MusixmatchError.TokenInvalid)
             assertEquals(setOf(1, 2), requested.toSet())
-            assertEquals(0, callbacks.get())
+            assertEquals(1, callbacks.get())
         } finally {
             cleanup(operation, rejectFirst, releaseSibling)
             entered.close()
@@ -482,7 +484,7 @@ class MusixmatchSearchConcurrencyTest {
     }
 
     @Test
-    fun unauthorizedRetryIsTerminalAndCancelsBlockedSibling() = scenario {
+    fun unauthorizedRetryIsTerminalDrainsActiveSiblingAndStopsQueue() = scenario {
         val entered = Channel<Int>(Channel.UNLIMITED)
         val releaseUnauthorized = CompletableDeferred<Unit>()
         val releaseSibling = CompletableDeferred<Unit>()
@@ -518,13 +520,14 @@ class MusixmatchSearchConcurrencyTest {
         try {
             assertEquals(setOf(1, 2), setOf(entered.receive(), entered.receive()))
             releaseUnauthorized.complete(Unit)
+            releaseSibling.complete(Unit)
             assertTrue(failure { operation.await() } is MusixmatchError.TokenInvalid)
             assertEquals(1, renewals.get())
             assertEquals(
                 mapOf((1 to oldToken) to 1, (1 to newToken) to 1, (2 to oldToken) to 1),
                 requested.groupingBy { it }.eachCount(),
             )
-            assertEquals(0, callbacks.get())
+            assertEquals(1, callbacks.get())
         } finally {
             cleanup(operation, releaseUnauthorized, releaseSibling)
             entered.close()
@@ -532,10 +535,10 @@ class MusixmatchSearchConcurrencyTest {
     }
 
     @Test
-    fun httpRateLimitCancelsSiblingAndPreservesAlreadyEmittedLyrics() = rateLimitScenario(payload = false)
+    fun httpRateLimitDrainsActiveSiblingPreservesEmittedLyricsAndStopsQueue() = rateLimitScenario(payload = false)
 
     @Test
-    fun payloadRateLimitCancelsSiblingAndPreservesAlreadyEmittedLyrics() = rateLimitScenario(payload = true)
+    fun payloadRateLimitDrainsActiveSiblingPreservesEmittedLyricsAndStopsQueue() = rateLimitScenario(payload = true)
 
     private fun rateLimitScenario(payload: Boolean) = scenario {
         val entered = Channel<Int>(Channel.UNLIMITED)
@@ -589,8 +592,10 @@ class MusixmatchSearchConcurrencyTest {
             assertEquals("Candidate 1", callbacks.receive())
             assertEquals(3, entered.receive())
             releaseRateLimit.complete(Unit)
+            releaseSibling.complete(Unit)
+            assertEquals("Candidate 3", callbacks.receive())
             assertTrue(failure { operation.await() } is MusixmatchError.RateLimited)
-            assertEquals(listOf("Candidate 1"), emitted.toList())
+            assertEquals(listOf("Candidate 1", "Candidate 3"), emitted.toList())
             assertEquals(0, renewals.get())
             assertEquals(mapOf(1 to 1, 2 to 1, 3 to 1), requested.groupingBy { it }.eachCount())
         } finally {
