@@ -329,11 +329,13 @@ class MusixmatchHybridTest {
                         candidate2Entered.await()
                         respond(macro(1L), HttpStatusCode.TooManyRequests, headers)
                     } else {
-                        candidate2Entered.complete(Unit)
-                        respond(macro(2L), headers = headers)
+                        respond(macro(2L, track = track(2, richsync = 1)), headers = headers)
                     }
                 }
-                "track.richsync.get" -> respond(envelope("{}", 429), HttpStatusCode.TooManyRequests, headers = headers)
+                "track.richsync.get" -> {
+                    candidate2Entered.complete(Unit)
+                    respond(envelope("{}", 429), HttpStatusCode.TooManyRequests, headers = headers)
+                }
                 else -> error("Unexpected endpoint: ${request.url.encodedPath}")
             }
         })
@@ -344,6 +346,7 @@ class MusixmatchHybridTest {
         } catch (e: MusixmatchError) { e }
         assertTrue(failure is MusixmatchError.RateLimited)
         assertEquals(listOf("Lyrics 2"), results)
+        assertTrue(requests.any { it.encodedPath.endsWith("track.richsync.get") })
     }
 
     @Test
@@ -365,17 +368,130 @@ class MusixmatchHybridTest {
                         candidate2Entered.await()
                         respond(macro(2L), HttpStatusCode.TooManyRequests, headers)
                     } else {
-                        candidate2Entered.complete(Unit)
-                        respond(macro(3L), headers = headers)
+                        respond(macro(3L, track = track(3, richsync = 1)), headers = headers)
                     }
                 }
-                "track.richsync.get" -> respond(envelope("{}", 429), HttpStatusCode.TooManyRequests, headers = headers)
+                "track.richsync.get" -> {
+                    candidate2Entered.complete(Unit)
+                    respond(envelope("{}", 429), HttpStatusCode.TooManyRequests, headers = headers)
+                }
                 else -> error("Unexpected endpoint: ${request.url.encodedPath}")
             }
         })
         Musixmatch.cachedToken = "cached_test_token"
         val result = playback()
         assertEquals("Lyrics 3", result.getOrThrow())
+        assertTrue(requests.any { it.encodedPath.endsWith("track.richsync.get") })
+    }
+
+    @Test
+    fun fanOutSingleCandidate_richsyncEnrichmentRateLimited_yieldsPlainAndThrowsRateLimited() = runBlocking {
+        val results = mutableListOf<String>()
+        requests.clear()
+        Musixmatch.resetForTesting(MockEngine { request ->
+            requests.add(request.url)
+            when (request.url.encodedPath.substringAfterLast('/')) {
+                "track.search" -> respond(
+                    envelope("{\"track_list\":[{\"track\":${track(1, richsync = 1)}}]}"),
+                    headers = headers,
+                )
+                "macro.subtitles.get" -> respond(macro(1L, track = track(1, richsync = 1)), headers = headers)
+                "track.richsync.get" -> respond(envelope("{}", 429), HttpStatusCode.TooManyRequests, headers = headers)
+                else -> error("Unexpected endpoint: ${request.url.encodedPath}")
+            }
+        })
+        Musixmatch.cachedToken = "cached_test_token"
+        val failure = try {
+            Musixmatch.getAllLyrics("Koiiro", "Mosawo", durationSeconds = 100) { results.add(it) }
+            null
+        } catch (e: MusixmatchError) { e }
+        assertTrue(failure is MusixmatchError.RateLimited)
+        assertEquals(listOf("Lyrics 1"), results)
+        assertTrue(requests.any { it.encodedPath.endsWith("track.richsync.get") })
+    }
+
+    @Test
+    fun fanOutSingleCandidate_richsyncEnrichmentTokenRenewalFails_yieldsPlainAndThrowsTokenInvalid() = runBlocking {
+        val results = mutableListOf<String>()
+        requests.clear()
+        Musixmatch.resetForTesting(MockEngine { request ->
+            requests.add(request.url)
+            when (request.url.encodedPath.substringAfterLast('/')) {
+                "track.search" -> respond(
+                    envelope("{\"track_list\":[{\"track\":${track(1, richsync = 1)}}]}"),
+                    headers = headers,
+                )
+                "macro.subtitles.get" -> respond(macro(1L, track = track(1, richsync = 1)), headers = headers)
+                "track.richsync.get" -> respond(envelope("{}", 401), HttpStatusCode.Unauthorized, headers = headers)
+                "token.get" -> respond("Internal Server Error", HttpStatusCode.InternalServerError, headers = headers)
+                else -> error("Unexpected endpoint: ${request.url.encodedPath}")
+            }
+        })
+        Musixmatch.cachedToken = "cached_test_token"
+        val failure = try {
+            Musixmatch.getAllLyrics("Koiiro", "Mosawo", durationSeconds = 100) { results.add(it) }
+            null
+        } catch (e: MusixmatchError) { e }
+        assertTrue(failure is MusixmatchError.TokenInvalid)
+        assertEquals(listOf("Lyrics 1"), results)
+        assertTrue(requests.any { it.encodedPath.endsWith("track.richsync.get") })
+        assertTrue(requests.any { it.encodedPath.endsWith("token.get") })
+    }
+
+    @Test
+    fun fanOutSearchRenewalSuccess_allFourCandidatesExecutedSuccessfully() = runBlocking {
+        val results = mutableListOf<String>()
+        requests.clear()
+        var searchAttempts = 0
+        Musixmatch.resetForTesting(MockEngine { request ->
+            requests.add(request.url)
+            when (request.url.encodedPath.substringAfterLast('/')) {
+                "track.search" -> {
+                    searchAttempts++
+                    if (searchAttempts == 1) {
+                        respond(envelope("{}", 401), HttpStatusCode.Unauthorized, headers = headers)
+                    } else {
+                        respond(
+                            envelope("{\"track_list\":[{\"track\":${track(1)}},{\"track\":${track(2)}},{\"track\":${track(3)}},{\"track\":${track(4)}}]}"),
+                            headers = headers,
+                        )
+                    }
+                }
+                "token.get" -> respond(envelope("{\"user_token\":\"renewed_test_token\"}"), headers = headers)
+                "macro.subtitles.get" -> {
+                    val id = request.url.parameters["track_id"]?.toLongOrNull() ?: 1L
+                    respond(macro(id), headers = headers)
+                }
+                else -> error("Unexpected endpoint: ${request.url.encodedPath}")
+            }
+        })
+        Musixmatch.cachedToken = "initial_invalid_token"
+        Musixmatch.getAllLyrics("Koiiro", "Mosawo", durationSeconds = 100) { results.add(it) }
+        assertEquals(4, results.size)
+        assertEquals(setOf("Lyrics 1", "Lyrics 2", "Lyrics 3", "Lyrics 4"), results.toSet())
+    }
+
+    @Test
+    fun renewalFailureCauseDoesNotContainTokenOrUrl() = runBlocking {
+        requests.clear()
+        Musixmatch.resetForTesting(MockEngine { request ->
+            requests.add(request.url)
+            when (request.url.encodedPath.substringAfterLast('/')) {
+                "track.search" -> respond(envelope("{}", 401), HttpStatusCode.Unauthorized, headers = headers)
+                "token.get" -> respond("Error 500", HttpStatusCode.InternalServerError, headers = headers)
+                else -> error("Unexpected endpoint: ${request.url.encodedPath}")
+            }
+        })
+        Musixmatch.cachedToken = "secret_user_token_123"
+        val error = try {
+            Musixmatch.getAllLyrics("Koiiro", "Mosawo") {}
+            null
+        } catch (e: MusixmatchError.TokenInvalid) { e }
+        assertNotNull(error)
+        val fullMessage = "${error!!.message} ${error.cause?.message}"
+        assertFalse(fullMessage.contains("secret_user_token_123"))
+        assertFalse(fullMessage.contains("https://"))
+        assertFalse(fullMessage.contains("usertoken"))
     }
 
     @Test

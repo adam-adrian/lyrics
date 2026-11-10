@@ -49,8 +49,6 @@ import moe.rukamori.archivetune.musixmatch.models.bodyAs
 import kotlin.math.abs
 
 object Musixmatch {
-    private const val BASE_URL = "https://apic-appmobile.musixmatch.com/ws/1.1/"
-    private const val APP_ID = "mac-ios-v2.0"
     private const val SEARCH_PAGE_SIZE = 20
     private const val SEARCH_MAX_CANDIDATES = 4
     private const val SEARCH_CONCURRENCY = 2
@@ -199,66 +197,6 @@ object Musixmatch {
         return decodeApiResponse(response, jsonFormat, "macro")
     }
 
-    private suspend fun fetchRichSyncSeparately(
-        commonTrackId: Long,
-        trackLength: Int,
-        token: String,
-        contextLabel: String,
-    ): String? {
-        if (commonTrackId <= 0) return null
-        return try {
-            logger?.invoke("Musixmatch $contextLabel: separate richsync request started")
-            val response =
-                client.get("${BASE_URL}track.richsync.get") {
-                    parameter("format", "json")
-                    parameter("subtitle_format", "mxm")
-                    parameter("app_id", APP_ID)
-                    parameter("richsync_compact_type", "words")
-                    parameter("commontrack_id", commonTrackId)
-                    parameter("f_subtitle_length", trackLength)
-                    parameter("q_duration", trackLength)
-                    parameter("usertoken", token)
-                }
-            decodeStandaloneResponse<RichSyncBody>(response, jsonFormat, "richsync")?.richsync?.richsyncBody
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: MusixmatchError) {
-            if (e is MusixmatchError.TokenInvalid || e is MusixmatchError.RateLimited) throw e
-            null
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    private suspend fun fetchSubtitleSeparately(
-        trackId: Long,
-        trackLength: Int,
-        token: String,
-        contextLabel: String,
-    ): String? {
-        if (trackId <= 0) return null
-        return try {
-            logger?.invoke("Musixmatch $contextLabel: separate subtitle request started")
-            val response =
-                client.get("${BASE_URL}track.subtitle.get") {
-                    parameter("format", "json")
-                    parameter("subtitle_format", "mxm")
-                    parameter("app_id", APP_ID)
-                    parameter("track_id", trackId)
-                    if (trackLength > 0) parameter("f_subtitle_length", trackLength)
-                    parameter("usertoken", token)
-                }
-            decodeStandaloneResponse<SubtitleBody>(response, jsonFormat, "subtitle")?.subtitle?.subtitleBody
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: MusixmatchError) {
-            if (e is MusixmatchError.TokenInvalid || e is MusixmatchError.RateLimited) throw e
-            null
-        } catch (e: Exception) {
-            null
-        }
-    }
-
     internal fun matchedTrack(calls: MacroCalls?, expectedTrackId: Long? = null): Track {
         val matcherCall = calls?.matcherTrackGet
         val status = matcherCall?.message?.header?.statusCode ?: 0
@@ -319,7 +257,7 @@ object Musixmatch {
             }
         }
         val richsync = lyricsFormat.tryTtml(inlineRichsync) ?: if (track.isRichsyncAvailable) {
-            resolveEnrichment({ fetchRichSyncSeparately(track.commonTrackId, track.trackLength, it, contextLabel) }, lyricsFormat::tryTtml)
+            resolveEnrichment({ fetchRichSyncSeparately(client, jsonFormat, track.commonTrackId, track.trackLength, it, contextLabel, logger) }, lyricsFormat::tryTtml)
         } else null
         richsync?.let { return ResolvedLyrics(it, 2) }
 
@@ -327,8 +265,8 @@ object Musixmatch {
             calls.trackSubtitlesGet.bodyAs<SubtitlesBody>(jsonFormat)
                 ?.subtitleList?.firstOrNull()?.subtitle?.subtitleBody
         } else null
-        val subtitle = lyricsFormat.tryLrc(inlineSubtitle) ?: if (track.isSubtitlesAvailable) {
-            resolveEnrichment({ fetchSubtitleSeparately(track.trackId, track.trackLength, it, contextLabel) }, lyricsFormat::tryLrc)
+        val subtitle = lyricsFormat.tryLrc(inlineSubtitle) ?: if (enrichmentTerminal == null && track.isSubtitlesAvailable) {
+            resolveEnrichment({ fetchSubtitleSeparately(client, jsonFormat, track.trackId, track.trackLength, it, contextLabel, logger) }, lyricsFormat::tryLrc)
         } else null
         subtitle?.let { return ResolvedLyrics(it, 1) }
 
@@ -336,7 +274,7 @@ object Musixmatch {
             ?.takeIf { it.message.header.statusCode == 200 }
             .bodyAs<LyricsBody>(jsonFormat)
             ?.lyrics?.lyricsBody
-        lyricsFormat.tryPlain(plain)?.let { return ResolvedLyrics(it, 0) }
+        lyricsFormat.tryPlain(plain)?.let { return ResolvedLyrics(it, 0, terminalError = enrichmentTerminal) }
 
         if (enrichmentTerminal != null) throw enrichmentTerminal
         throw MusixmatchError.NoMatch("No lyrics found in any format")
@@ -363,6 +301,7 @@ object Musixmatch {
                         tokenState,
                         "playback",
                     )
+                    if (res.terminalError != null) throw res.terminalError
                     logger?.invoke("Musixmatch playback: success quality=${res.quality}")
                     res.lyrics
                 } catch (e: MusixmatchError.Instrumental) {
@@ -413,6 +352,7 @@ object Musixmatch {
                     tokenState,
                     "title-fallback",
                 )
+                if (res.terminalError != null) throw res.terminalError
                 logger?.invoke("Musixmatch title-fallback: success quality=${res.quality}")
                 res.lyrics
             } catch (e: CancellationException) {
@@ -455,6 +395,12 @@ object Musixmatch {
                                 "fan-out ranked $rank",
                             )
                             logger?.invoke("Musixmatch fan-out ranked $rank: success demerit=${candidate.demerit} quality=${res.quality} rating=${candidate.track.trackRating}")
+                            if (res.terminalError != null) {
+                                terminalErrors.add(rank to res.terminalError)
+                                if (startedCount.get() < candidates.size && queueStopped.compareAndSet(false, true)) {
+                                    logger?.invoke("Musixmatch fan-out: queue stopped — terminal (${errorLabel(res.terminalError)}) at ranked $rank")
+                                }
+                            }
                             res.lyrics
                         } catch (e: CancellationException) {
                             throw e

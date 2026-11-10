@@ -6,13 +6,22 @@
  */
 package moe.rukamori.archivetune.musixmatch
 
+import io.ktor.client.HttpClient
+import io.ktor.client.request.get
+import io.ktor.client.request.parameter
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import moe.rukamori.archivetune.musixmatch.models.ApiResponse
+import moe.rukamori.archivetune.musixmatch.models.RichSyncBody
+import moe.rukamori.archivetune.musixmatch.models.SubtitleBody
 import moe.rukamori.archivetune.musixmatch.models.Track
+
+internal const val BASE_URL = "https://apic-appmobile.musixmatch.com/ws/1.1/"
+internal const val APP_ID = "mac-ios-v2.0"
 
 sealed interface MacroTarget {
     data class ByName(
@@ -33,6 +42,7 @@ sealed interface MacroTarget {
 data class ResolvedLyrics(
     val lyrics: String,
     val quality: Int = 0,
+    val terminalError: MusixmatchError? = null,
 )
 
 data class SearchCandidate(
@@ -108,4 +118,70 @@ internal suspend inline fun <reified T> decodeResponse(
         throw MusixmatchError.MalformedResponse("Status code $statusCode on $operation")
     }
     return apiResponse.message?.body ?: if (lenient) null else throw MusixmatchError.MalformedResponse("Empty $operation body")
+}
+
+internal suspend fun fetchRichSyncSeparately(
+    client: HttpClient,
+    jsonFormat: Json,
+    commonTrackId: Long,
+    trackLength: Int,
+    token: String,
+    contextLabel: String,
+    logger: ((String) -> Unit)? = null,
+): String? {
+    if (commonTrackId <= 0) return null
+    return try {
+        logger?.invoke("Musixmatch $contextLabel: separate richsync request started")
+        val response =
+            client.get("${BASE_URL}track.richsync.get") {
+                parameter("format", "json")
+                parameter("subtitle_format", "mxm")
+                parameter("app_id", APP_ID)
+                parameter("richsync_compact_type", "words")
+                parameter("commontrack_id", commonTrackId)
+                parameter("f_subtitle_length", trackLength)
+                parameter("q_duration", trackLength)
+                parameter("usertoken", token)
+            }
+        decodeStandaloneResponse<RichSyncBody>(response, jsonFormat, "richsync")?.richsync?.richsyncBody
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: MusixmatchError) {
+        if (e is MusixmatchError.TokenInvalid || e is MusixmatchError.RateLimited) throw e
+        null
+    } catch (e: Exception) {
+        null
+    }
+}
+
+internal suspend fun fetchSubtitleSeparately(
+    client: HttpClient,
+    jsonFormat: Json,
+    trackId: Long,
+    trackLength: Int,
+    token: String,
+    contextLabel: String,
+    logger: ((String) -> Unit)? = null,
+): String? {
+    if (trackId <= 0) return null
+    return try {
+        logger?.invoke("Musixmatch $contextLabel: separate subtitle request started")
+        val response =
+            client.get("${BASE_URL}track.subtitle.get") {
+                parameter("format", "json")
+                parameter("subtitle_format", "mxm")
+                parameter("app_id", APP_ID)
+                parameter("track_id", trackId)
+                if (trackLength > 0) parameter("f_subtitle_length", trackLength)
+                parameter("usertoken", token)
+            }
+        decodeStandaloneResponse<SubtitleBody>(response, jsonFormat, "subtitle")?.subtitle?.subtitleBody
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: MusixmatchError) {
+        if (e is MusixmatchError.TokenInvalid || e is MusixmatchError.RateLimited) throw e
+        null
+    } catch (e: Exception) {
+        null
+    }
 }
