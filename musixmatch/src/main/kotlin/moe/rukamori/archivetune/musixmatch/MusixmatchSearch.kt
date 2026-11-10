@@ -8,13 +8,11 @@ package moe.rukamori.archivetune.musixmatch
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.yield
+import java.util.concurrent.atomic.AtomicBoolean
 import moe.rukamori.archivetune.musixmatch.models.SearchBody
 import moe.rukamori.archivetune.musixmatch.models.Track
 import kotlin.math.abs
@@ -138,34 +136,43 @@ internal suspend fun Musixmatch.resolveSearchFallback(
 
     val outcomes = mutableListOf<CandidateOutcome>()
     coroutineScope {
-        val channel = Channel<CandidateOutcome>()
+        val channel = Channel<CandidateOutcome>(candidates.size)
+        val loggedOutcome = Array(candidates.size) { AtomicBoolean(false) }
         lateinit var jobs: List<Job>
         jobs = candidates.mapIndexed { index, candidate ->
             val rank = index + 1
             launch {
-                if (index > 0) delay(10)
                 val outcome = try {
                     val resolved = resolveRequest(
                         MacroTarget.ById(candidate.track.trackId, title, artist, durationSeconds),
                         tokenState,
                         "fallback ranked $rank",
                     )
-                    logger?.invoke("Musixmatch fallback ranked $rank: success demerit=${candidate.demerit} quality=${resolved.quality} rating=${candidate.track.trackRating}")
+                    if (loggedOutcome[index].compareAndSet(false, true)) {
+                        logger?.invoke("Musixmatch fallback ranked $rank: success demerit=${candidate.demerit} quality=${resolved.quality} rating=${candidate.track.trackRating}")
+                    }
                     CandidateOutcome.Success(candidate, rank, resolved)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: MusixmatchError.Instrumental) {
-                    logger?.invoke("Musixmatch fallback ranked $rank: instrumental")
+                    if (loggedOutcome[index].compareAndSet(false, true)) {
+                        logger?.invoke("Musixmatch fallback ranked $rank: instrumental")
+                    }
                     CandidateOutcome.LocalFailure(candidate, rank, e)
                 } catch (e: MusixmatchError.TokenInvalid) {
-                    logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
+                    if (loggedOutcome[index].compareAndSet(false, true)) {
+                        logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
+                    }
                     CandidateOutcome.TerminalFailure(candidate, rank, e)
                 } catch (e: MusixmatchError.RateLimited) {
-                    logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
-                    jobs.forEachIndexed { idx, j -> if (idx + 1 > rank) j.cancel() }
+                    if (loggedOutcome[index].compareAndSet(false, true)) {
+                        logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
+                    }
                     CandidateOutcome.TerminalFailure(candidate, rank, e)
                 } catch (e: Exception) {
-                    logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
+                    if (loggedOutcome[index].compareAndSet(false, true)) {
+                        logger?.invoke("Musixmatch fallback ranked $rank: failed (${errorLabel(e)})")
+                    }
                     CandidateOutcome.LocalFailure(candidate, rank, e)
                 }
                 channel.send(outcome)
@@ -195,7 +202,7 @@ internal suspend fun Musixmatch.resolveSearchFallback(
                     logger?.invoke("Musixmatch fallback: early-stop")
                     jobs.forEachIndexed { idx, job ->
                         val r = idx + 1
-                        if (r != bestSuccess.rank && outcomes.none { it.rank == r }) {
+                        if (r != bestSuccess.rank && loggedOutcome[idx].compareAndSet(false, true)) {
                             logger?.invoke("Musixmatch fallback ranked $r: cancelled (early-stop)")
                             job.cancel()
                         }
