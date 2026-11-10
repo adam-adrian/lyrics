@@ -43,7 +43,7 @@ class MusixmatchSearchSelectionTest {
         assertEquals("1", parameters["f_has_lyrics"])
         assertEquals("Song", parameters["q_track"])
         assertEquals("Artist", parameters["q_artist"])
-        assertFalse("Dead parameter q_artists must be omitted", parameters.containsKey("q_artists"))
+        assertNull(parameters["q_artists"])
     }
 
     @Test
