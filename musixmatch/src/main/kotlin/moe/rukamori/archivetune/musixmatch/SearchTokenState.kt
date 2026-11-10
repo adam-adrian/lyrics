@@ -31,7 +31,10 @@ internal class SearchTokenState(
     @Volatile
     private var terminalFailure: MusixmatchError? = null
 
-    val renewalAttempted: Boolean get() = renewalUsed
+    @Volatile
+    private var renewalFailed = false
+
+    val isRenewalFailed: Boolean get() = renewalFailed
 
     private val renewalMutex = Mutex()
     private var renewalUsed = false
@@ -59,6 +62,7 @@ internal class SearchTokenState(
                     } catch (failure: CancellationException) {
                         throw failure
                     } catch (failure: Exception) {
+                        renewalFailed = true
                         if (failure is MusixmatchError.RateLimited) {
                             terminalFailure = failure
                             throw failure

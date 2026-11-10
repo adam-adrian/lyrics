@@ -442,11 +442,11 @@ object Musixmatch {
             val jobs = candidates.mapIndexed { index, candidate ->
                 launch {
                     val rank = index + 1
-                    if (terminalErrors.isNotEmpty() || tokenState.renewalAttempted) return@launch
+                    if (terminalErrors.isNotEmpty() || tokenState.isRenewalFailed) return@launch
 
                     val lyrics = semaphore.withPermit {
                         currentCoroutineContext().ensureActive()
-                        if (terminalErrors.isNotEmpty() || tokenState.renewalAttempted) return@withPermit null
+                        if (terminalErrors.isNotEmpty() || tokenState.isRenewalFailed) return@withPermit null
                         startedCount.incrementAndGet()
                         try {
                             val res = resolveRequest(
