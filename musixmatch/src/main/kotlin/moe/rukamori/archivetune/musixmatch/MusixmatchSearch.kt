@@ -8,8 +8,10 @@ package moe.rukamori.archivetune.musixmatch
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
@@ -143,6 +145,7 @@ internal suspend fun Musixmatch.resolveSearchFallback(
             val candidate = candidates[index]
             val rank = index + 1
             val job = launch {
+                if (index > 0) delay(10)
                 val outcome = try {
                     val resolved = resolveRequest(
                         MacroTarget.ById(candidate.track.trackId, title, artist, durationSeconds),
@@ -210,6 +213,7 @@ internal suspend fun Musixmatch.resolveSearchFallback(
                             job.cancel()
                         }
                     }
+                    channel.cancel()
                     break
                 }
             }
