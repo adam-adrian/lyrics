@@ -18,7 +18,7 @@ internal suspend fun <T> searchRequest(block: suspend () -> T): T =
     } catch (e: MusixmatchError) {
         throw e
     } catch (e: Exception) {
-        throw MusixmatchError.MalformedResponse("Search request failed: ${e.message ?: e::class.simpleName}", e)
+        throw MusixmatchError.MalformedResponse("Search request failed")
     }
 
 internal class SearchTokenState(

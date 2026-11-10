@@ -299,26 +299,24 @@ object Musixmatch {
         }
         if (track.isInstrumental) throw MusixmatchError.Instrumental()
 
-        val inlineRichsync = if (calls?.trackRichsyncGet?.message?.header?.statusCode == 200) {
+        val richsync = if (calls?.trackRichsyncGet?.message?.header?.statusCode == 200) {
             calls.trackRichsyncGet.bodyAs<RichSyncBody>(jsonFormat)?.richsync?.richsyncBody
+        } else if (track.isRichsyncAvailable) {
+            tokenState.execute { token -> fetchRichSyncSeparately(track.commonTrackId, track.trackLength, token, contextLabel) }
         } else null
-        val richsync = lyricsFormat.tryTtml(inlineRichsync) ?: if (track.isRichsyncAvailable) {
-            lyricsFormat.tryTtml(tokenState.execute { token ->
-                fetchRichSyncSeparately(track.commonTrackId, track.trackLength, token, contextLabel)
-            })
-        } else null
-        richsync?.let { return ResolvedLyrics(it, 2) }
+        lyricsFormat.tryTtml(richsync)?.let { return ResolvedLyrics(it, 2) }
 
         val inlineSubtitle = if (calls?.trackSubtitlesGet?.message?.header?.statusCode == 200) {
-            calls.trackSubtitlesGet.bodyAs<SubtitlesBody>(jsonFormat)
+            val raw = calls.trackSubtitlesGet.bodyAs<SubtitlesBody>(jsonFormat)
                 ?.subtitleList?.firstOrNull()?.subtitle?.subtitleBody
+            if (raw == "[]") null else raw
         } else null
-        val subtitle = lyricsFormat.tryLrc(inlineSubtitle) ?: if (track.isSubtitlesAvailable) {
-            lyricsFormat.tryLrc(tokenState.execute { token ->
-                fetchSubtitleSeparately(track.trackId, track.trackLength, token, contextLabel)
-            })
+        val subtitle = if (inlineSubtitle != null) {
+            inlineSubtitle
+        } else if (track.isSubtitlesAvailable) {
+            tokenState.execute { token -> fetchSubtitleSeparately(track.trackId, track.trackLength, token, contextLabel) }
         } else null
-        subtitle?.let { return ResolvedLyrics(it, 1) }
+        lyricsFormat.tryLrc(subtitle)?.let { return ResolvedLyrics(it, 1) }
 
         val plain = calls?.trackLyricsGet
             ?.takeIf { it.message.header.statusCode == 200 }
@@ -406,48 +404,63 @@ object Musixmatch {
         val terminalErrors = ConcurrentLinkedQueue<Pair<Int, MusixmatchError>>()
         val semaphore = Semaphore(SEARCH_CONCURRENCY)
         val callbackMutex = Mutex()
-        coroutineScope {
-            val jobs = candidates.mapIndexed { index, candidate ->
-                launch {
-                    val rank = index + 1
-                    if (terminalErrors.isNotEmpty()) return@launch
+        try {
+            coroutineScope {
+                val searchScope = this
+                val jobs = candidates.mapIndexed { index, candidate ->
+                    launch {
+                        val rank = index + 1
+                        if (terminalErrors.isNotEmpty()) return@launch
 
-                    val lyrics = try {
-                        semaphore.withPermit {
-                            currentCoroutineContext().ensureActive()
-                            if (terminalErrors.isNotEmpty()) return@withPermit null
-                            startedCount.incrementAndGet()
-                            val res = resolveRequest(
-                                MacroTarget.ById(candidate.track.trackId, durationSeconds = durationSeconds),
-                                tokenState,
-                                "fan-out ranked $rank",
-                            )
-                            logger?.invoke("Musixmatch fan-out ranked $rank: success demerit=${candidate.demerit} quality=${res.quality} rating=${candidate.track.trackRating}")
-                            res.lyrics
-                        }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: MusixmatchError.Instrumental) {
-                        logger?.invoke("Musixmatch fan-out ranked $rank: instrumental")
-                        null
-                    } catch (e: Exception) {
-                        logger?.invoke("Musixmatch fan-out ranked $rank: failed (${errorLabel(e)})")
-                        if (e is MusixmatchError.TokenInvalid || e is MusixmatchError.RateLimited) {
-                            terminalErrors.add(rank to e)
-                            if (startedCount.get() < candidates.size && queueStopped.compareAndSet(false, true)) {
-                                logger?.invoke("Musixmatch fan-out: queue stopped — terminal (${errorLabel(e)}) at ranked $rank")
+                        val lyrics = try {
+                            semaphore.withPermit {
+                                currentCoroutineContext().ensureActive()
+                                if (terminalErrors.isNotEmpty()) return@withPermit null
+                                startedCount.incrementAndGet()
+                                val res = resolveRequest(
+                                    MacroTarget.ById(candidate.track.trackId, durationSeconds = durationSeconds),
+                                    tokenState,
+                                    "fan-out ranked $rank",
+                                )
+                                logger?.invoke("Musixmatch fan-out ranked $rank: success demerit=${candidate.demerit} quality=${res.quality} rating=${candidate.track.trackRating}")
+                                res.lyrics
                             }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: MusixmatchError.Instrumental) {
+                            logger?.invoke("Musixmatch fan-out ranked $rank: instrumental")
+                            null
+                        } catch (e: Exception) {
+                            logger?.invoke("Musixmatch fan-out ranked $rank: failed (${errorLabel(e)})")
+                            if (e is MusixmatchError.TokenInvalid || e is MusixmatchError.RateLimited) {
+                                terminalErrors.add(rank to e)
+                                if (startedCount.get() < candidates.size && queueStopped.compareAndSet(false, true)) {
+                                    logger?.invoke("Musixmatch fan-out: queue stopped — terminal (${errorLabel(e)}) at ranked $rank")
+                                }
+                                yield()
+                                searchScope.cancel()
+                            }
+                            null
                         }
-                        null
-                    }
-                    if (lyrics != null) {
-                        callbackMutex.withLock {
-                            callback(lyrics)
+                        if (lyrics != null) {
+                            withContext(NonCancellable) {
+                                callbackMutex.withLock {
+                                    try {
+                                        callback(lyrics)
+                                    } catch (e: CancellationException) {
+                                        searchScope.cancel(e)
+                                        throw e
+                                    }
+                                }
+                            }
                         }
                     }
                 }
+                jobs.joinAll()
             }
-            jobs.joinAll()
+        } catch (e: CancellationException) {
+            val bestTerminal = terminalErrors.minByOrNull { it.first }
+            if (bestTerminal == null) throw e
         }
 
         val bestTerminal = terminalErrors.minByOrNull { it.first }

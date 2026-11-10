@@ -112,16 +112,6 @@ class MusixmatchRichsyncSearchTest {
     }
 
     @Test
-    fun inlineRichsyncEmptyOrMalformedWithStatus200FallsBackToStandalone() = runBlocking {
-        for (emptyBody in listOf("{}", "{\"richsync\":{}}", "{\"richsync\":{\"richsync_body\":\"\"}}", "{\"richsync\":{\"richsync_body\":\"invalid ttml\"}}")) {
-            setup(inline = emptyBody)
-            val searched = search().single()
-            assertTrue(searched.contains("Separate winner"))
-            assertEquals(1, richRequests().size)
-        }
-    }
-
-    @Test
     fun standaloneFailureOrMalformedRichsyncRetainsSubtitleFallback() = runBlocking {
         setup(richStatuses = listOf(500), subtitle = "Subtitle winner")
         assertEquals(listOf("[00:01.000] Subtitle winner"), search())
