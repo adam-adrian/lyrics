@@ -259,7 +259,7 @@ object Musixmatch {
         val richsync = lyricsFormat.tryTtml(inlineRichsync) ?: if (track.isRichsyncAvailable) {
             resolveEnrichment({ fetchRichSyncSeparately(client, jsonFormat, track.commonTrackId, track.trackLength, it, contextLabel, logger) }, lyricsFormat::tryTtml)
         } else null
-        richsync?.let { return ResolvedLyrics(it, 2) }
+        richsync?.let { return ResolvedLyrics(it, 2, terminalError = enrichmentTerminal) }
 
         val inlineSubtitle = if (calls?.trackSubtitlesGet?.message?.header?.statusCode == 200) {
             calls.trackSubtitlesGet.bodyAs<SubtitlesBody>(jsonFormat)
@@ -268,7 +268,7 @@ object Musixmatch {
         val subtitle = lyricsFormat.tryLrc(inlineSubtitle) ?: if (enrichmentTerminal == null && track.isSubtitlesAvailable) {
             resolveEnrichment({ fetchSubtitleSeparately(client, jsonFormat, track.trackId, track.trackLength, it, contextLabel, logger) }, lyricsFormat::tryLrc)
         } else null
-        subtitle?.let { return ResolvedLyrics(it, 1) }
+        subtitle?.let { return ResolvedLyrics(it, 1, terminalError = enrichmentTerminal) }
 
         val plain = calls?.trackLyricsGet
             ?.takeIf { it.message.header.statusCode == 200 }
@@ -375,6 +375,12 @@ object Musixmatch {
         val startedCount = AtomicInteger(0)
         val queueStopped = AtomicBoolean(false)
         val terminalErrors = ConcurrentLinkedQueue<Pair<Int, MusixmatchError>>()
+        val recordTerminal = { rank: Int, error: MusixmatchError ->
+            terminalErrors.add(rank to error)
+            if (startedCount.get() < candidates.size && queueStopped.compareAndSet(false, true)) {
+                logger?.invoke("Musixmatch fan-out: queue stopped — terminal (${errorLabel(error)}) at ranked $rank")
+            }
+        }
         val semaphore = Semaphore(SEARCH_CONCURRENCY)
         val callbackMutex = Mutex()
         coroutineScope {
@@ -395,12 +401,7 @@ object Musixmatch {
                                 "fan-out ranked $rank",
                             )
                             logger?.invoke("Musixmatch fan-out ranked $rank: success demerit=${candidate.demerit} quality=${res.quality} rating=${candidate.track.trackRating}")
-                            if (res.terminalError != null) {
-                                terminalErrors.add(rank to res.terminalError)
-                                if (startedCount.get() < candidates.size && queueStopped.compareAndSet(false, true)) {
-                                    logger?.invoke("Musixmatch fan-out: queue stopped — terminal (${errorLabel(res.terminalError)}) at ranked $rank")
-                                }
-                            }
+                            if (res.terminalError != null) recordTerminal(rank, res.terminalError)
                             res.lyrics
                         } catch (e: CancellationException) {
                             throw e
@@ -409,12 +410,7 @@ object Musixmatch {
                             null
                         } catch (e: Exception) {
                             logger?.invoke("Musixmatch fan-out ranked $rank: failed (${errorLabel(e)})")
-                            if (e is MusixmatchError.TokenInvalid || e is MusixmatchError.RateLimited) {
-                                terminalErrors.add(rank to e)
-                                if (startedCount.get() < candidates.size && queueStopped.compareAndSet(false, true)) {
-                                    logger?.invoke("Musixmatch fan-out: queue stopped — terminal (${errorLabel(e)}) at ranked $rank")
-                                }
-                            }
+                            if (e is MusixmatchError.TokenInvalid || e is MusixmatchError.RateLimited) recordTerminal(rank, e)
                             null
                         }
                     }

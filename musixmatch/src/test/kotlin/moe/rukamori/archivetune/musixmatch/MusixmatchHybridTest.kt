@@ -530,12 +530,128 @@ class MusixmatchHybridTest {
         assertEquals(listOf(2L, 3L), ids())
     }
 
+    @Test
+    fun fanOutSingleCandidate_richsyncEnrichmentRateLimited_withInlineSubtitle_yieldsSubtitleAndThrowsRateLimited() = runBlocking {
+        val results = mutableListOf<String>()
+        requests.clear()
+        Musixmatch.resetForTesting(MockEngine { request ->
+            requests.add(request.url)
+            when (request.url.encodedPath.substringAfterLast('/')) {
+                "track.search" -> respond(
+                    envelope("{\"track_list\":[{\"track\":${track(1, richsync = 1, sub = 1)}}]}"),
+                    headers = headers,
+                )
+                "macro.subtitles.get" -> respond(
+                    macro(1L, track = track(1, richsync = 1, sub = 1), subtitle = "[00:01.00] Line 1"),
+                    headers = headers,
+                )
+                "track.richsync.get" -> respond(envelope("{}", 429), HttpStatusCode.TooManyRequests, headers = headers)
+                else -> error("Unexpected endpoint: ${request.url.encodedPath}")
+            }
+        })
+        Musixmatch.cachedToken = "cached_test_token"
+        val failure = try {
+            Musixmatch.getAllLyrics("Koiiro", "Mosawo", durationSeconds = 100) { results.add(it) }
+            null
+        } catch (e: MusixmatchError) { e }
+        assertTrue(failure is MusixmatchError.RateLimited)
+        assertEquals(listOf("[00:01.00] Line 1"), results)
+        assertTrue(requests.any { it.encodedPath.endsWith("track.richsync.get") })
+    }
+
+    @Test
+    fun fanOutSingleCandidate_richsyncEnrichmentTokenRenewalFails_withInlineSubtitle_yieldsSubtitleAndThrowsTokenInvalid() = runBlocking {
+        val results = mutableListOf<String>()
+        requests.clear()
+        Musixmatch.resetForTesting(MockEngine { request ->
+            requests.add(request.url)
+            when (request.url.encodedPath.substringAfterLast('/')) {
+                "track.search" -> respond(
+                    envelope("{\"track_list\":[{\"track\":${track(1, richsync = 1, sub = 1)}}]}"),
+                    headers = headers,
+                )
+                "macro.subtitles.get" -> respond(
+                    macro(1L, track = track(1, richsync = 1, sub = 1), subtitle = "[00:01.00] Line 1"),
+                    headers = headers,
+                )
+                "track.richsync.get" -> respond(envelope("{}", 401), HttpStatusCode.Unauthorized, headers = headers)
+                "token.get" -> respond("Internal Server Error", HttpStatusCode.InternalServerError, headers = headers)
+                else -> error("Unexpected endpoint: ${request.url.encodedPath}")
+            }
+        })
+        Musixmatch.cachedToken = "cached_test_token"
+        val failure = try {
+            Musixmatch.getAllLyrics("Koiiro", "Mosawo", durationSeconds = 100) { results.add(it) }
+            null
+        } catch (e: MusixmatchError) { e }
+        assertTrue(failure is MusixmatchError.TokenInvalid)
+        assertEquals(listOf("[00:01.00] Line 1"), results)
+        assertTrue(requests.any { it.encodedPath.endsWith("track.richsync.get") })
+        assertTrue(requests.any { it.encodedPath.endsWith("token.get") })
+    }
+
+    @Test
+    fun playbackMain_richsyncEnrichmentRateLimited_withInlineSubtitle_throwsRateLimited() = runBlocking {
+        requests.clear()
+        Musixmatch.resetForTesting(MockEngine { request ->
+            requests.add(request.url)
+            when (request.url.encodedPath.substringAfterLast('/')) {
+                "macro.subtitles.get" -> respond(
+                    macro(1L, track = track(1, richsync = 1, sub = 1), subtitle = "[00:01.00] Line 1"),
+                    headers = headers,
+                )
+                "track.richsync.get" -> respond(envelope("{}", 429), HttpStatusCode.TooManyRequests, headers = headers)
+                else -> error("Unexpected endpoint: ${request.url.encodedPath}")
+            }
+        })
+        Musixmatch.cachedToken = "cached_test_token"
+        val result = playback()
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is MusixmatchError.RateLimited)
+        assertTrue(requests.any { it.encodedPath.endsWith("track.richsync.get") })
+    }
+
+    @Test
+    fun titleFallback_richsyncEnrichmentRateLimited_withInlineSubtitle_throwsRateLimited() = runBlocking {
+        requests.clear()
+        Musixmatch.resetForTesting(MockEngine { request ->
+            requests.add(request.url)
+            when (request.url.encodedPath.substringAfterLast('/')) {
+                "track.search" -> respond(envelope("{\"track_list\":[]}"), headers = headers)
+                "macro.subtitles.get" -> respond(
+                    macro(1L, track = track(1, richsync = 1, sub = 1), subtitle = "[00:01.00] Line 1"),
+                    headers = headers,
+                )
+                "track.richsync.get" -> respond(envelope("{}", 429), HttpStatusCode.TooManyRequests, headers = headers)
+                else -> error("Unexpected endpoint: ${request.url.encodedPath}")
+            }
+        })
+        Musixmatch.cachedToken = "cached_test_token"
+        val failure = try {
+            Musixmatch.getAllLyrics("Koiiro", "Mosawo") {}
+            null
+        } catch (e: MusixmatchError) { e }
+        assertTrue(failure is MusixmatchError.RateLimited)
+        assertTrue(requests.any { it.encodedPath.endsWith("track.richsync.get") })
+    }
+
     private fun quote(value: String): String = Json.encodeToString(value)
     private fun track(id: Long, length: Int = 100, instrumental: Int = 0, title: String = "Koiiro", artist: String = "Mosawo", richsync: Int = 0, sub: Int = 0): String =
         """{"track_id":$id,"commontrack_id":${id + 1000},"track_name":${quote(title)},"artist_name":${quote(artist)},"track_length":$length,"instrumental":$instrumental,"has_richsync":$richsync,"has_subtitles":$sub}"""
     private fun envelope(body: String, status: Int = 200) = """{"message":{"header":{"status_code":$status},"body":$body}}"""
     private fun call(body: String, status: Int = 200) = """{"message":{"header":{"status_code":$status},"body":$body}}"""
-    private fun macro(id: Long = 1, track: String = track(id), matcherStatus: Int = 200, restricted: Boolean = false): String = envelope(
-        """{"macro_calls":{"matcher.track.get":${call("{\"track\":$track}", matcherStatus)},"track.lyrics.get":${call("{\"lyrics\":{\"lyrics_body\":\"Lyrics $id\",\"restricted\":${if (restricted) 1 else 0}}}")}}}"""
-    )
+    private fun macro(
+        id: Long = 1,
+        track: String = track(id),
+        matcherStatus: Int = 200,
+        restricted: Boolean = false,
+        subtitle: String? = null,
+    ): String {
+        val subtitleCall = if (subtitle != null) {
+            ""","track.subtitles.get":${call("{\"subtitle_list\":[{\"subtitle\":{\"subtitle_body\":${quote(subtitle)}}}]}")}"""
+        } else ""
+        return envelope(
+            """{"macro_calls":{"matcher.track.get":${call("{\"track\":$track}", matcherStatus)},"track.lyrics.get":${call("{\"lyrics\":{\"lyrics_body\":\"Lyrics $id\",\"restricted\":${if (restricted) 1 else 0}}}")}$subtitleCall}}"""
+        )
+    }
 }
