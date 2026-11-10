@@ -81,7 +81,7 @@ internal suspend inline fun <reified T> decodeApiResponse(
     response: HttpResponse,
     jsonFormat: Json,
     operation: String,
-): T = decodeResponse<T>(response, jsonFormat, operation, lenient = false)!!
+): T = checkNotNull(decodeResponse<T>(response, jsonFormat, operation, lenient = false))
 
 internal suspend inline fun <reified T> decodeStandaloneResponse(
     response: HttpResponse,

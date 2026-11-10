@@ -439,6 +439,32 @@ class MusixmatchHybridTest {
     }
 
     @Test
+    fun fanOutSingleCandidate_subtitleEnrichmentRateLimited_yieldsPlainAndThrowsRateLimited() = runBlocking {
+        val results = mutableListOf<String>()
+        requests.clear()
+        Musixmatch.resetForTesting(MockEngine { request ->
+            requests.add(request.url)
+            when (request.url.encodedPath.substringAfterLast('/')) {
+                "track.search" -> respond(
+                    envelope("{\"track_list\":[{\"track\":${track(1, sub = 1)}}]}"),
+                    headers = headers,
+                )
+                "macro.subtitles.get" -> respond(macro(1L, track = track(1, sub = 1)), headers = headers)
+                "track.subtitle.get" -> respond(envelope("{}", 429), HttpStatusCode.TooManyRequests, headers = headers)
+                else -> error("Unexpected endpoint: ${request.url.encodedPath}")
+            }
+        })
+        Musixmatch.cachedToken = "cached_test_token"
+        val failure = try {
+            Musixmatch.getAllLyrics("Koiiro", "Mosawo", durationSeconds = 100) { results.add(it) }
+            null
+        } catch (e: MusixmatchError) { e }
+        assertTrue(failure is MusixmatchError.RateLimited)
+        assertEquals(listOf("Lyrics 1"), results)
+        assertTrue(requests.any { it.encodedPath.endsWith("track.subtitle.get") })
+    }
+
+    @Test
     fun fanOutSearchRenewalSuccess_allFourCandidatesExecutedSuccessfully() = runBlocking {
         val results = mutableListOf<String>()
         requests.clear()
