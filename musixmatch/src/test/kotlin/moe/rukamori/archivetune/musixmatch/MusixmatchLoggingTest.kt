@@ -90,13 +90,18 @@ class MusixmatchLoggingTest {
     @Test
     fun playbackFallbackSuccessWithEarlyStop_logsCorrectClasses() = runBlocking {
         Musixmatch.logger = { logs.add(it) }
+        val release2 = CompletableDeferred<Unit>()
         Musixmatch.resetForTesting(MockEngine { request ->
             when (request.url.encodedPath.substringAfterLast('/')) {
                 "track.search" -> respond(envelope("{\"track_list\":[{\"track\":${track(1)}},{\"track\":${track(2)}}]}"), headers = headers)
                 "macro.subtitles.get" -> {
                     val id = request.url.parameters["track_id"]?.toLongOrNull()
                     if (id == null) respond(macro(matcherStatus = 404), headers = headers)
-                    else respond(macro(id, hasRichsync = (id == 1L)), headers = headers)
+                    else if (id == 1L) respond(macro(1, hasRichsync = true), headers = headers)
+                    else {
+                        release2.await()
+                        respond(macro(2), headers = headers)
+                    }
                 }
                 else -> error("Unexpected endpoint: ${request.url.encodedPath}")
             }
@@ -104,6 +109,7 @@ class MusixmatchLoggingTest {
         Musixmatch.cachedToken = "test_token"
 
         val result = Musixmatch.getLyrics("Song", "Artist", durationSeconds = 100)
+        release2.complete(Unit)
         assertTrue(result.isSuccess)
 
         assertAllLogsMatchAllowlist()
