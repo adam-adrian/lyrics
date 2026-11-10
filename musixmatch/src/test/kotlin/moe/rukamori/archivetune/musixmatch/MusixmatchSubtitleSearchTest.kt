@@ -152,11 +152,13 @@ class MusixmatchSubtitleSearchTest {
 
     @Test
     fun inline200WithEmptyBodyFallsBackToStandaloneSubtitle() = runBlocking {
-        setup(subtitleAvailable = true, inlineSubtitle = "[]")
-        val lyrics = search()
-        assertEquals(1, lyrics.size)
-        assertTrue(lyrics.first().contains("Separate subtitle winner"))
-        assertEquals(1, subtitleRequests().size)
+        for (emptyBody in listOf("[]", "", "   ", "invalid lrc json")) {
+            setup(subtitleAvailable = true, inlineSubtitle = emptyBody)
+            val lyrics = search()
+            assertEquals(1, lyrics.size)
+            assertTrue(lyrics.first().contains("Separate subtitle winner"))
+            assertEquals(1, subtitleRequests().size)
+        }
     }
 
     private fun quote(value: String) = Json.encodeToString(value)

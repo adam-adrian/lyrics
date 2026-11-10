@@ -31,11 +31,18 @@ internal object MusixmatchTtml {
         String.format(Locale.US, "%.3fs", seconds)
 
     fun escapeXml(value: String): String =
-        value.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\"", "&quot;")
-            .replace("'", "&apos;")
+        buildString(value.length) {
+            for (char in value) {
+                when (char) {
+                    '&' -> append("&amp;")
+                    '<' -> append("&lt;")
+                    '>' -> append("&gt;")
+                    '"' -> append("&quot;")
+                    '\'' -> append("&apos;")
+                    else -> append(char)
+                }
+            }
+        }
 
     fun convertLine(line: RichSyncLine): String? {
         val words = line.words

@@ -236,8 +236,7 @@ internal suspend fun Musixmatch.resolveSearchFallback(
     if (localFailures.isNotEmpty()) {
         val bestLocal = localFailures.minByOrNull { it.rank }!!
         logger?.invoke("Musixmatch fallback: all candidates failed (${errorLabel(bestLocal.error)}) from ranked ${bestLocal.rank}")
-        if (bestLocal.error is MusixmatchError) throw bestLocal.error
-        throw MusixmatchError.NoMatch(bestLocal.error.message ?: "Local failure in search candidate")
+        throw bestLocal.error
     }
 
     throw MusixmatchError.NoMatch("Search fallback returned no usable lyrics")

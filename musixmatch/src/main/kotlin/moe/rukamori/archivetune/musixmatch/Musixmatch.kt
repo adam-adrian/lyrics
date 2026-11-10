@@ -26,7 +26,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.yield
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -223,10 +222,9 @@ object Musixmatch {
             decodeStandaloneResponse<RichSyncBody>(response, jsonFormat, "richsync")?.richsync?.richsyncBody
         } catch (e: CancellationException) {
             throw e
-        } catch (e: MusixmatchError.TokenInvalid) {
-            throw e
-        } catch (e: MusixmatchError.RateLimited) {
-            throw e
+        } catch (e: MusixmatchError) {
+            if (e is MusixmatchError.TokenInvalid || e is MusixmatchError.RateLimited) throw e
+            null
         } catch (e: Exception) {
             null
         }
@@ -253,10 +251,9 @@ object Musixmatch {
             decodeStandaloneResponse<SubtitleBody>(response, jsonFormat, "subtitle")?.subtitle?.subtitleBody
         } catch (e: CancellationException) {
             throw e
-        } catch (e: MusixmatchError.TokenInvalid) {
-            throw e
-        } catch (e: MusixmatchError.RateLimited) {
-            throw e
+        } catch (e: MusixmatchError) {
+            if (e is MusixmatchError.TokenInvalid || e is MusixmatchError.RateLimited) throw e
+            null
         } catch (e: Exception) {
             null
         }
@@ -303,24 +300,37 @@ object Musixmatch {
         }
         if (track.isInstrumental) throw MusixmatchError.Instrumental()
 
-        val richsync = if (calls?.trackRichsyncGet?.message?.header?.statusCode == 200) {
+        val inlineRichsync = if (calls?.trackRichsyncGet?.message?.header?.statusCode == 200) {
             calls.trackRichsyncGet.bodyAs<RichSyncBody>(jsonFormat)?.richsync?.richsyncBody
-        } else if (track.isRichsyncAvailable) {
-            tokenState.execute { token -> fetchRichSyncSeparately(track.commonTrackId, track.trackLength, token, contextLabel) }
         } else null
-        lyricsFormat.tryTtml(richsync)?.let { return ResolvedLyrics(it, 2) }
+        var enrichmentTerminal: MusixmatchError? = null
+        val resolveEnrichment: suspend (suspend (String) -> String?, (String?) -> String?) -> String? = { fetch, tryFormat ->
+            try {
+                tokenState.execute { token -> fetch(token) }?.let { tryFormat(it) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: MusixmatchError) {
+                if (enrichmentTerminal == null && (e is MusixmatchError.TokenInvalid || e is MusixmatchError.RateLimited)) {
+                    enrichmentTerminal = e
+                }
+                null
+            } catch (e: Exception) {
+                null
+            }
+        }
+        val richsync = lyricsFormat.tryTtml(inlineRichsync) ?: if (track.isRichsyncAvailable) {
+            resolveEnrichment({ fetchRichSyncSeparately(track.commonTrackId, track.trackLength, it, contextLabel) }, lyricsFormat::tryTtml)
+        } else null
+        richsync?.let { return ResolvedLyrics(it, 2) }
 
         val inlineSubtitle = if (calls?.trackSubtitlesGet?.message?.header?.statusCode == 200) {
-            val raw = calls.trackSubtitlesGet.bodyAs<SubtitlesBody>(jsonFormat)
+            calls.trackSubtitlesGet.bodyAs<SubtitlesBody>(jsonFormat)
                 ?.subtitleList?.firstOrNull()?.subtitle?.subtitleBody
-            if (raw == "[]") null else raw
         } else null
-        val subtitle = if (inlineSubtitle != null) {
-            inlineSubtitle
-        } else if (track.isSubtitlesAvailable) {
-            tokenState.execute { token -> fetchSubtitleSeparately(track.trackId, track.trackLength, token, contextLabel) }
+        val subtitle = lyricsFormat.tryLrc(inlineSubtitle) ?: if (track.isSubtitlesAvailable) {
+            resolveEnrichment({ fetchSubtitleSeparately(track.trackId, track.trackLength, it, contextLabel) }, lyricsFormat::tryLrc)
         } else null
-        lyricsFormat.tryLrc(subtitle)?.let { return ResolvedLyrics(it, 1) }
+        subtitle?.let { return ResolvedLyrics(it, 1) }
 
         val plain = calls?.trackLyricsGet
             ?.takeIf { it.message.header.statusCode == 200 }
@@ -328,6 +338,7 @@ object Musixmatch {
             ?.lyrics?.lyricsBody
         lyricsFormat.tryPlain(plain)?.let { return ResolvedLyrics(it, 0) }
 
+        if (enrichmentTerminal != null) throw enrichmentTerminal
         throw MusixmatchError.NoMatch("No lyrics found in any format")
     }
 
@@ -395,7 +406,7 @@ object Musixmatch {
         logSearchFunnel("fan-out", searchBody, durationSeconds, candidates.size)
 
         if (candidates.isEmpty()) {
-            try {
+            val lyrics = try {
                 logger?.invoke("Musixmatch title-fallback: title matcher")
                 val res = resolveRequest(
                     MacroTarget.ByName(cleanTitle, cleanArtist, album?.trim().orEmpty(), durationSeconds),
@@ -403,15 +414,20 @@ object Musixmatch {
                     "title-fallback",
                 )
                 logger?.invoke("Musixmatch title-fallback: success quality=${res.quality}")
-                currentCoroutineContext().ensureActive()
-                callback(res.lyrics)
+                res.lyrics
             } catch (e: CancellationException) {
                 throw e
             } catch (e: MusixmatchError.Instrumental) {
                 logger?.invoke("Musixmatch title-fallback: instrumental")
+                null
             } catch (e: MusixmatchError) {
                 logger?.invoke("Musixmatch title-fallback: failed (${errorLabel(e)})")
                 if (e is MusixmatchError.TokenInvalid || e is MusixmatchError.RateLimited) throw e
+                null
+            }
+            if (lyrics != null) {
+                currentCoroutineContext().ensureActive()
+                callback(lyrics)
             }
             return
         }
