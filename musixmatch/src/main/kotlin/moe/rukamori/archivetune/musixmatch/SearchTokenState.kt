@@ -38,15 +38,7 @@ internal class SearchTokenState(
 
     suspend fun <T> execute(block: suspend (String) -> T): T {
         terminalFailure?.let { throw it }
-        val currentToken = if (renewalUsed) {
-            renewalMutex.withLock {
-                terminalFailure?.let { throw it }
-                token
-            }
-        } else {
-            token
-        }
-        val previous = currentToken
+        val previous = token
         try {
             return searchRequest { block(previous) }
         } catch (e: MusixmatchError.RateLimited) {
