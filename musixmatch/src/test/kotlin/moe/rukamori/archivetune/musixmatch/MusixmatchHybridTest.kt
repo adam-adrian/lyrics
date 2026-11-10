@@ -205,7 +205,7 @@ class MusixmatchHybridTest {
         setup(tracks = listOf(track(2), track(3)), titleMacro = macro(matcherStatus = 404), idStatuses = mapOf(2L to 429, 3L to 429))
         val failure = playback().exceptionOrNull()
         assertTrue(failure is MusixmatchError.RateLimited)
-        assertEquals(listOf(2L, 3L), ids())
+        assertEquals(listOf(2L), ids())
     }
 
     @Test
