@@ -339,7 +339,7 @@ class MusixmatchHybridTest {
         })
         Musixmatch.cachedToken = "cached_test_token"
         val failure = try {
-            Musixmatch.getAllLyrics("Koiiro", "Mosawo", durationSeconds = 100, results::add)
+            Musixmatch.getAllLyrics("Koiiro", "Mosawo", durationSeconds = 100) { results.add(it) }
             null
         } catch (e: MusixmatchError) { e }
         assertTrue(failure is MusixmatchError.RateLimited)
