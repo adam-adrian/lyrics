@@ -299,24 +299,26 @@ object Musixmatch {
         }
         if (track.isInstrumental) throw MusixmatchError.Instrumental()
 
-        val richsync = if (calls?.trackRichsyncGet?.message?.header?.statusCode == 200) {
+        val inlineRichsync = if (calls?.trackRichsyncGet?.message?.header?.statusCode == 200) {
             calls.trackRichsyncGet.bodyAs<RichSyncBody>(jsonFormat)?.richsync?.richsyncBody
-        } else if (track.isRichsyncAvailable) {
-            tokenState.execute { token -> fetchRichSyncSeparately(track.commonTrackId, track.trackLength, token, contextLabel) }
         } else null
-        lyricsFormat.tryTtml(richsync)?.let { return ResolvedLyrics(it, 2) }
+        val richsync = lyricsFormat.tryTtml(inlineRichsync) ?: if (track.isRichsyncAvailable) {
+            lyricsFormat.tryTtml(tokenState.execute { token ->
+                fetchRichSyncSeparately(track.commonTrackId, track.trackLength, token, contextLabel)
+            })
+        } else null
+        richsync?.let { return ResolvedLyrics(it, 2) }
 
         val inlineSubtitle = if (calls?.trackSubtitlesGet?.message?.header?.statusCode == 200) {
-            val raw = calls.trackSubtitlesGet.bodyAs<SubtitlesBody>(jsonFormat)
+            calls.trackSubtitlesGet.bodyAs<SubtitlesBody>(jsonFormat)
                 ?.subtitleList?.firstOrNull()?.subtitle?.subtitleBody
-            if (raw == "[]") null else raw
         } else null
-        val subtitle = if (inlineSubtitle != null) {
-            inlineSubtitle
-        } else if (track.isSubtitlesAvailable) {
-            tokenState.execute { token -> fetchSubtitleSeparately(track.trackId, track.trackLength, token, contextLabel) }
+        val subtitle = lyricsFormat.tryLrc(inlineSubtitle) ?: if (track.isSubtitlesAvailable) {
+            lyricsFormat.tryLrc(tokenState.execute { token ->
+                fetchSubtitleSeparately(track.trackId, track.trackLength, token, contextLabel)
+            })
         } else null
-        lyricsFormat.tryLrc(subtitle)?.let { return ResolvedLyrics(it, 1) }
+        subtitle?.let { return ResolvedLyrics(it, 1) }
 
         val plain = calls?.trackLyricsGet
             ?.takeIf { it.message.header.statusCode == 200 }

@@ -88,6 +88,12 @@ internal suspend inline fun <reified T> decodeApiResponse(
     return apiResponse.message?.body ?: throw MusixmatchError.MalformedResponse("Empty $operation body")
 }
 
+/**
+ * Decodes standalone responses (track.richsync.get, track.subtitle.get).
+ * Unlike primary API calls where 5xx throws [MusixmatchError.ServerError], standalone calls are optional
+ * enrichment formats where server errors (5xx) or missing bodies return null, allowing fallback to
+ * alternative formats (subtitles or plain lyrics) to proceed, as locked by ordinaryStandaloneFailureKeepsOtherCandidates.
+ */
 internal suspend inline fun <reified T> decodeStandaloneResponse(
     response: HttpResponse,
     jsonFormat: Json,

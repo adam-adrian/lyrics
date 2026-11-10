@@ -6,13 +6,13 @@
  */
 package moe.rukamori.archivetune.musixmatch
 
-internal sealed class MusixmatchError(message: String) : Exception(message) {
-    class TokenInvalid(detail: String) : MusixmatchError("Token invalid: $detail")
-    class RateLimited(detail: String) : MusixmatchError("Rate limited: $detail")
-    class NoMatch(detail: String) : MusixmatchError("No match: $detail")
-    class Restricted : MusixmatchError("Lyrics restricted")
-    class Instrumental(message: String = "Track is instrumental") : MusixmatchError(message)
-    class ServerError(code: Int) : MusixmatchError("Server error: $code")
-    class MalformedResponse(detail: String) : MusixmatchError("Malformed response: $detail")
-    class Mismatch(detail: String) : MusixmatchError("Match rejected: $detail")
+sealed class MusixmatchError(message: String, cause: Throwable? = null) : Exception(message, cause) {
+    class TokenInvalid(detail: String, cause: Throwable? = null) : MusixmatchError("Token invalid: $detail", cause)
+    class RateLimited(detail: String, cause: Throwable? = null) : MusixmatchError("Rate limited: $detail", cause)
+    class NoMatch(detail: String, cause: Throwable? = null) : MusixmatchError("No match: $detail", cause)
+    class Restricted(cause: Throwable? = null) : MusixmatchError("Lyrics restricted", cause)
+    class Instrumental(message: String = "Track is instrumental", cause: Throwable? = null) : MusixmatchError(message, cause)
+    class ServerError(code: Int, cause: Throwable? = null) : MusixmatchError("Server error: $code", cause)
+    class MalformedResponse(detail: String, cause: Throwable? = null) : MusixmatchError("Malformed response: $detail", cause)
+    class Mismatch(detail: String, cause: Throwable? = null) : MusixmatchError("Match rejected: $detail", cause)
 }
