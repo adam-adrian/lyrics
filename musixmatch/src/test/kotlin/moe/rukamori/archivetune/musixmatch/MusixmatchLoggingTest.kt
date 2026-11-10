@@ -209,6 +209,7 @@ class MusixmatchLoggingTest {
         Musixmatch.logger = { logs.add(it) }
         val entered1 = CompletableDeferred<Unit>()
         val release1 = CompletableDeferred<Unit>()
+        val releaseSibling = CompletableDeferred<Unit>()
         Musixmatch.resetForTesting(MockEngine { request ->
             when (request.url.encodedPath.substringAfterLast('/')) {
                 "track.search" -> respond(
@@ -222,6 +223,7 @@ class MusixmatchLoggingTest {
                         release1.await()
                         respond(status(429), headers = headers)
                     } else {
+                        releaseSibling.await()
                         respond(macro(id ?: 0), headers = headers)
                     }
                 }
@@ -237,6 +239,7 @@ class MusixmatchLoggingTest {
         }
         entered1.await()
         release1.complete(Unit)
+        releaseSibling.complete(Unit)
         val res = op.await()
         assertTrue(res.isFailure)
 
